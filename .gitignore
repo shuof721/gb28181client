@@ -1,0 +1,28 @@
+# build
+/bin/
+*.exe
+*.test
+*.out
+
+# logs
+*.log
+*.err
+dev.log
+dev.err
+plat.log
+plat.err
+
+# media cache / large local videos (keep only demo.mp4 & test.h264)
+assets/*.cache
+assets/*.h264.v*.cache
+assets/1.mp4
+assets/2.mp4
+assets/1.h264*
+assets/2.h264*
+
+# editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

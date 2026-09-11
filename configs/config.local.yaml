@@ -1,0 +1,52 @@
+sip:
+  server_ip: "127.0.0.1"
+  server_port: 5060
+  local_ip: "127.0.0.1"
+  local_port: 5070
+  transport: "udp"
+  username: "34020000001180000001"
+  password: "12345678"
+  expires: 3600
+  keepalive_interval: 30
+  keepalive_timeout_count: 3
+
+device:
+  id: "34020000001180000001"
+  domain: "3402000000"
+  name: "模拟NVR"
+  manufacturer: "GB28181-Sim"
+  model: "SIM-NVR-100"
+  firmware: "V1.0.0"
+  channels:
+    - id: "34020000001320000001"
+      name: "通道1"
+      manufacturer: "GB28181-Sim"
+      model: "SIM-IPC-01"
+      address: "Camera-01"
+      status: "ON"
+      parental: 0
+      parent_id: "34020000001180000001"
+      register_way: 1
+      civil_code: "340200"
+    - id: "34020000001320000002"
+      name: "通道2"
+      manufacturer: "GB28181-Sim"
+      model: "SIM-IPC-02"
+      address: "Camera-02"
+      status: "ON"
+      parental: 0
+      parent_id: "34020000001180000001"
+      register_way: 1
+      civil_code: "340200"
+
+media:
+  source: "file"
+  h264_file: "assets/test.h264"
+  width: 1280
+  height: 720
+  fps: 25
+  rtp_payload_max: 1400
+  local_ip: "127.0.0.1"
+
+logging:
+  level: "info"

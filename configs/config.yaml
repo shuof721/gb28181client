@@ -1,0 +1,75 @@
+# GB28181 模拟设备（NVR + 多通道）
+# 对接目标：WVP-GB28181-pro + ZLMediaKit
+
+sip:
+  # 平台 SIP 地址（改成你 WVP 所在机器 IP）
+  server_ip: "192.168.20.168"
+  server_port: 8116
+  # 本机 SIP 监听（平台需能访问到此地址）
+  local_ip: "192.168.20.168"
+  local_port: 5070
+  transport: "udp"          # udp | tcp
+  username: "34020000001180000001"   # 通常等于设备国标编号
+  password: "12345678"               # 与平台添加设备时的密码一致
+  expires: 3600
+  keepalive_interval: 60
+  keepalive_timeout_count: 3
+
+device:
+  id: "34020000001180000001"         # 20 位设备国标编号
+  domain: "3402000000"
+  name: "模拟NVR"
+  manufacturer: "GB28181-Sim"
+  model: "SIM-NVR-100"
+  firmware: "V1.0.0"
+  channels:
+    - id: "34020000001320000001"
+      name: "通道1"
+      manufacturer: "GB28181-Sim"
+      model: "SIM-IPC-01"
+      address: "Camera-01"
+      status: "ON"
+      parental: 0
+      parent_id: "34020000001180000001"
+      register_way: 1
+      civil_code: "340200"
+    - id: "34020000001320000002"
+      name: "通道2"
+      manufacturer: "GB28181-Sim"
+      model: "SIM-IPC-02"
+      address: "Camera-02"
+      status: "ON"
+      parental: 0
+      parent_id: "34020000001180000001"
+      register_way: 1
+      civil_code: "340200"
+
+media:
+  # mode:
+  #   shared      - 所有通道共用同一个视频（用下面的 mp4_file / h264_file）
+  #   per_channel - 每个通道用不同视频（channels 里按通道 ID 配置；未配置的通道回退到全局）
+  mode: "per_channel"
+
+  # 全局默认（per_channel 未匹配到通道时的回退；shared 模式直接用这里）
+  source: "mp4"
+  mp4_file: "assets/1.mp4"
+  h264_file: "assets/test.h264"
+
+  # 按通道指定视频（key 必须是 20 位通道国标编号，不要带 :SSRC）
+  channels:
+    "34020000001320000001":
+      source: "mp4"
+      mp4_file: "assets/1.mp4"
+    "34020000001320000002":
+      source: "mp4"
+      mp4_file: "assets/2.mp4"
+
+  width: 1280
+  height: 720
+  fps: 25
+  rtp_payload_max: 1400
+  # 发送 RTP 的源地址，默认同 sip.local_ip
+  # local_ip: "192.168.20.168"
+
+logging:
+  level: "info"
