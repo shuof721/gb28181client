@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,8 +18,10 @@ import (
 
 type Device struct {
 	cfg *config.Config
-	ua  *sip.UA
-	ms  *media.SessionManager
+	// 运行时修改通道/媒体绑定时用
+	cfgMu sync.RWMutex
+	ua    *sip.UA
+	ms    *media.SessionManager
 
 	sn        int32
 	kaFail    int32
@@ -40,10 +43,12 @@ func New(cfg *config.Config) *Device {
 		cfg:    cfg,
 		ua:     ua,
 		stopCh: make(chan struct{}),
-		logs:   NewLogBuffer(500),
+		logs:   NewLogBuffer(800),
 	}
 	srcFactory := func(channelID string) (media.H264Source, error) {
+		d.cfgRLock()
 		v := cfg.Media.OptionsFor(channelID)
+		d.cfgRUnlock()
 		log.Printf("[media] channel %s source=%s mp4=%s h264=%s",
 			channelID, v.Kind, v.MP4, v.H264)
 		return media.NewSource(media.SourceOptions{
@@ -103,6 +108,8 @@ func (d *Device) Status() Status {
 	for _, x := range sess {
 		sessions = append(sessions, x)
 	}
+
+	d.cfgRLock()
 	chs := make([]ChannelStatus, 0, len(d.cfg.Device.Channels))
 	for _, ch := range d.cfg.Device.Channels {
 		v := d.cfg.Media.OptionsFor(ch.ID)
@@ -112,21 +119,31 @@ func (d *Device) Status() Status {
 			Status: ch.Status,
 			MP4:    v.MP4,
 			Source: v.Kind,
+			H264:   v.H264,
 		})
 	}
+	mode := d.cfg.Media.Mode
+	src := d.cfg.Media.Source
+	deviceID := d.cfg.Device.ID
+	deviceName := d.cfg.Device.Name
+	server := fmt.Sprintf("%s:%d", d.cfg.SIP.ServerIP, d.cfg.SIP.ServerPort)
+	local := fmt.Sprintf("%s:%d", d.cfg.SIP.LocalIP, d.cfg.SIP.LocalPort)
+	transport := d.cfg.SIP.Transport
+	d.cfgRUnlock()
+
 	up := int64(0)
 	if !d.startedAt.IsZero() {
 		up = int64(time.Since(d.startedAt).Seconds())
 	}
 	return Status{
 		Registered:  d.ua.IsRegistered(),
-		DeviceID:    d.cfg.Device.ID,
-		DeviceName:  d.cfg.Device.Name,
-		Server:      fmt.Sprintf("%s:%d", d.cfg.SIP.ServerIP, d.cfg.SIP.ServerPort),
-		Local:       fmt.Sprintf("%s:%d", d.cfg.SIP.LocalIP, d.cfg.SIP.LocalPort),
-		Transport:   d.cfg.SIP.Transport,
-		MediaMode:   d.cfg.Media.Mode,
-		MediaSource: d.cfg.Media.Source,
+		DeviceID:    deviceID,
+		DeviceName:  deviceName,
+		Server:      server,
+		Local:       local,
+		Transport:   transport,
+		MediaMode:   mode,
+		MediaSource: src,
 		Channels:    chs,
 		Sessions:    sessions,
 		UptimeSec:   up,
@@ -350,6 +367,7 @@ func buildXMLResponse(fields map[string]any) []byte {
 }
 
 func (d *Device) respCatalog(root *gb28181.Root, req *sip.Message, src net.Addr) {
+	d.cfgRLock()
 	items := make([]gb28181.CatalogItem, 0, len(d.cfg.Device.Channels))
 	for _, ch := range d.cfg.Device.Channels {
 		items = append(items, gb28181.CatalogItem{
@@ -368,6 +386,7 @@ func (d *Device) respCatalog(root *gb28181.Root, req *sip.Message, src net.Addr)
 			Status:       ch.Status,
 		})
 	}
+	d.cfgRUnlock()
 
 	var listB strings.Builder
 	fmt.Fprintf(&listB, "  <DeviceList Num=\"%d\">\r\n", len(items))

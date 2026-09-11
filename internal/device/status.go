@@ -60,5 +60,6 @@ type ChannelStatus struct {
 	Name   string `json:"name"`
 	Status string `json:"status"`
 	MP4    string `json:"mp4"`
+	H264   string `json:"h264"`
 	Source string `json:"source"`
 }
