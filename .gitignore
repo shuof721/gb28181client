@@ -12,13 +12,15 @@ dev.err
 plat.log
 plat.err
 
-# media cache / large local videos (keep only demo.mp4 & test.h264)
+# assets：默认不入库大媒体/缓存，仅白名单示例文件
+# 之后往 assets 里放 3.mp4、4.mp4 等都不会被 git 跟踪
+assets/*
+!assets/demo.mp4
+!assets/test.h264
+
+# 若示例旁生成了抽流缓存，再排除一次
 assets/*.cache
 assets/*.h264.v*.cache
-assets/1.mp4
-assets/2.mp4
-assets/1.h264*
-assets/2.h264*
 
 # editor / OS
 .DS_Store
