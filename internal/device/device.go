@@ -20,11 +20,13 @@ type Device struct {
 	ua  *sip.UA
 	ms  *media.SessionManager
 
-	sn       int32
-	kaFail   int32
-	stopCh   chan struct{}
-	stopped  atomic.Bool
-	srcClose func() error
+	sn        int32
+	kaFail    int32
+	stopCh    chan struct{}
+	stopped   atomic.Bool
+	srcClose  func() error
+	startedAt time.Time
+	logs      *LogBuffer
 }
 
 func New(cfg *config.Config) *Device {
@@ -38,6 +40,7 @@ func New(cfg *config.Config) *Device {
 		cfg:    cfg,
 		ua:     ua,
 		stopCh: make(chan struct{}),
+		logs:   NewLogBuffer(500),
 	}
 	srcFactory := func(channelID string) (media.H264Source, error) {
 		v := cfg.Media.OptionsFor(channelID)
@@ -61,6 +64,7 @@ func (d *Device) nextSN() string {
 }
 
 func (d *Device) Start() error {
+	d.startedAt = time.Now()
 	if err := d.ua.Start(); err != nil {
 		return err
 	}
@@ -91,6 +95,68 @@ func (d *Device) Stop() {
 	d.ms.StopAll()
 	_ = d.ua.Unregister()
 	d.ua.Close()
+}
+
+func (d *Device) Status() Status {
+	sess := d.ms.ListSessions()
+	sessions := make([]any, 0, len(sess))
+	for _, x := range sess {
+		sessions = append(sessions, x)
+	}
+	chs := make([]ChannelStatus, 0, len(d.cfg.Device.Channels))
+	for _, ch := range d.cfg.Device.Channels {
+		v := d.cfg.Media.OptionsFor(ch.ID)
+		chs = append(chs, ChannelStatus{
+			ID:     ch.ID,
+			Name:   ch.Name,
+			Status: ch.Status,
+			MP4:    v.MP4,
+			Source: v.Kind,
+		})
+	}
+	up := int64(0)
+	if !d.startedAt.IsZero() {
+		up = int64(time.Since(d.startedAt).Seconds())
+	}
+	return Status{
+		Registered:  d.ua.IsRegistered(),
+		DeviceID:    d.cfg.Device.ID,
+		DeviceName:  d.cfg.Device.Name,
+		Server:      fmt.Sprintf("%s:%d", d.cfg.SIP.ServerIP, d.cfg.SIP.ServerPort),
+		Local:       fmt.Sprintf("%s:%d", d.cfg.SIP.LocalIP, d.cfg.SIP.LocalPort),
+		Transport:   d.cfg.SIP.Transport,
+		MediaMode:   d.cfg.Media.Mode,
+		MediaSource: d.cfg.Media.Source,
+		Channels:    chs,
+		Sessions:    sessions,
+		UptimeSec:   up,
+		StartedAt:   d.startedAt,
+	}
+}
+
+func (d *Device) RegisterNow() error {
+	return d.ua.Register(d.cfg.SIP.Expires)
+}
+
+func (d *Device) KeepaliveNow() error {
+	return d.sendKeepalive()
+}
+
+func (d *Device) StopSession(callID string) {
+	d.ms.StopByCallID(callID)
+}
+
+func (d *Device) Logs(n int) []string {
+	if d.logs == nil {
+		return nil
+	}
+	return d.logs.Tail(n)
+}
+
+func (d *Device) AppendLog(line string) {
+	if d.logs != nil {
+		d.logs.Append(line)
+	}
 }
 
 func (d *Device) registerLoop() {

@@ -13,6 +13,13 @@ type Config struct {
 	Device  DeviceConfig  `yaml:"device"`
 	Media   MediaConfig   `yaml:"media"`
 	Logging LoggingConfig `yaml:"logging"`
+	UI      UIConfig      `yaml:"ui"`
+}
+
+type UIConfig struct {
+	// 轻量 Web 控制台，空或 enabled=false 则不启动
+	Enabled bool `yaml:"enabled"`
+	Listen  string `yaml:"listen"` // 如 "127.0.0.1:8080"
 }
 
 type SIPConfig struct {
@@ -205,6 +212,10 @@ func Default() *Config {
 			RTPPayloadMax: 1400,
 		},
 		Logging: LoggingConfig{Level: "info"},
+		UI: UIConfig{
+			Enabled: true,
+			Listen:  "127.0.0.1:8080",
+		},
 	}
 }
 
@@ -225,6 +236,9 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) applyDefaults() {
+	if c.UI.Listen == "" {
+		c.UI.Listen = "127.0.0.1:8080"
+	}
 	if c.SIP.Transport == "" {
 		c.SIP.Transport = "udp"
 	}

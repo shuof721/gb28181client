@@ -73,3 +73,8 @@ media:
 
 logging:
   level: "info"
+
+ui:
+  enabled: true
+  listen: "127.0.0.1:7080"   # 浏览器打开此地址；局域网访问改成 0.0.0.0:7080
+

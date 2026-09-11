@@ -257,6 +257,35 @@ func (m *SessionManager) StopByCallID(callID string) {
 	}
 }
 
+// SessionInfo 供 UI/状态查询。
+type SessionInfo struct {
+	ChannelID  string `json:"channelId"`
+	CallID     string `json:"callId"`
+	SSRC       string `json:"ssrc"`
+	RemoteIP   string `json:"remoteIp"`
+	RemotePort int    `json:"remotePort"`
+	TCP        bool   `json:"tcp"`
+	SourceReady bool  `json:"sourceReady"`
+}
+
+func (m *SessionManager) ListSessions() []SessionInfo {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]SessionInfo, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		out = append(out, SessionInfo{
+			ChannelID:   s.ChannelID,
+			CallID:      s.CallID,
+			SSRC:        s.SSRC,
+			RemoteIP:    s.remoteIP,
+			RemotePort:  s.remotePort,
+			TCP:         s.isTCP,
+			SourceReady: s.source != nil,
+		})
+	}
+	return out
+}
+
 func (m *SessionManager) StopByChannel(ch string) {
 	m.mu.Lock()
 	s, ok := m.byChan[ch]
