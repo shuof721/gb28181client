@@ -155,6 +155,10 @@ func (d *Device) RegisterNow() error {
 	return d.ua.Register(d.cfg.SIP.Expires)
 }
 
+func (d *Device) UnregisterNow() error {
+	return d.ua.Unregister()
+}
+
 func (d *Device) KeepaliveNow() error {
 	return d.sendKeepalive()
 }

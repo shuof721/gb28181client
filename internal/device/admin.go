@@ -223,6 +223,60 @@ func (d *Device) SetMediaMode(mode string) error {
 	return nil
 }
 
+// DeleteVideo 从 assets 中删除视频及抽流缓存。
+func (d *Device) DeleteVideo(name string) error {
+	name = filepath.Base(name)
+	name = strings.ReplaceAll(name, "\\", "/")
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		name = name[i+1:]
+	}
+	if name == "" || name == "." || name == ".." {
+		return fmt.Errorf("非法文件名")
+	}
+	p := filepath.Join(AssetsDir, name)
+	if _, err := os.Stat(p); err != nil {
+		return fmt.Errorf("视频不存在: %s", name)
+	}
+	_ = os.Remove(p)
+	base := strings.TrimSuffix(name, filepath.Ext(name))
+	cache := filepath.Join(AssetsDir, base+".h264.v3.cache")
+	_ = os.Remove(cache)
+	log.Printf("[ui] video deleted: %s", name)
+	return nil
+}
+
+// UpdateChannelRequest 更新通道信息。
+type UpdateChannelRequest struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Status string `json:"status"` // ON | OFF
+}
+
+// UpdateChannel 更新通道名称或在线状态。
+func (d *Device) UpdateChannel(req UpdateChannelRequest) error {
+	id := config.NormalizeGBID(req.ID)
+	d.cfgLock()
+	defer d.cfgUnlock()
+	for i := range d.cfg.Device.Channels {
+		if d.cfg.Device.Channels[i].ID == id {
+			if strings.TrimSpace(req.Name) != "" {
+				d.cfg.Device.Channels[i].Name = strings.TrimSpace(req.Name)
+			}
+			st := strings.ToUpper(strings.TrimSpace(req.Status))
+			if st == "ON" || st == "OFF" {
+				d.cfg.Device.Channels[i].Status = st
+				if st == "OFF" {
+					go d.ms.StopByChannel(id)
+				}
+			}
+			log.Printf("[ui] channel updated id=%s name=%s status=%s", id, d.cfg.Device.Channels[i].Name, d.cfg.Device.Channels[i].Status)
+			go d.SendCatalogNotify()
+			return nil
+		}
+	}
+	return fmt.Errorf("通道不存在: %s", id)
+}
+
 func normalizeVideoPath(p string) string {
 	p = strings.TrimSpace(p)
 	if p == "" {

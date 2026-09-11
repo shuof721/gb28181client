@@ -148,6 +148,10 @@ type Session struct {
 
 	seq uint16
 
+	packetsSent atomic.Uint64
+	bytesSent   atomic.Uint64
+	startTime   time.Time
+
 	stopCh  chan struct{}
 	stopped atomic.Bool
 	wg      sync.WaitGroup
@@ -223,6 +227,7 @@ func (m *SessionManager) StartLive(channelID, callID string, recv *SDPInfo) (ans
 		fps:        m.fps,
 		payload:    m.payload,
 		localIP:    m.localIP,
+		startTime:  time.Now(),
 		stopCh:     make(chan struct{}),
 	}
 
@@ -259,13 +264,17 @@ func (m *SessionManager) StopByCallID(callID string) {
 
 // SessionInfo 供 UI/状态查询。
 type SessionInfo struct {
-	ChannelID  string `json:"channelId"`
-	CallID     string `json:"callId"`
-	SSRC       string `json:"ssrc"`
-	RemoteIP   string `json:"remoteIp"`
-	RemotePort int    `json:"remotePort"`
-	TCP        bool   `json:"tcp"`
-	SourceReady bool  `json:"sourceReady"`
+	ChannelID   string  `json:"channelId"`
+	CallID      string  `json:"callId"`
+	SSRC        string  `json:"ssrc"`
+	RemoteIP    string  `json:"remoteIp"`
+	RemotePort  int     `json:"remotePort"`
+	TCP         bool    `json:"tcp"`
+	SourceReady bool    `json:"sourceReady"`
+	PacketsSent uint64  `json:"packetsSent"`
+	BytesSent   uint64  `json:"bytesSent"`
+	DurationSec int64   `json:"durationSec"`
+	BitrateKbps float64 `json:"bitrateKbps"`
 }
 
 func (m *SessionManager) ListSessions() []SessionInfo {
@@ -273,6 +282,13 @@ func (m *SessionManager) ListSessions() []SessionInfo {
 	defer m.mu.Unlock()
 	out := make([]SessionInfo, 0, len(m.sessions))
 	for _, s := range m.sessions {
+		dur := time.Since(s.startTime).Seconds()
+		durSec := int64(dur)
+		var kbps float64
+		bytes := s.bytesSent.Load()
+		if dur > 0 {
+			kbps = float64(bytes*8) / dur / 1000.0
+		}
 		out = append(out, SessionInfo{
 			ChannelID:   s.ChannelID,
 			CallID:      s.CallID,
@@ -281,6 +297,10 @@ func (m *SessionManager) ListSessions() []SessionInfo {
 			RemotePort:  s.remotePort,
 			TCP:         s.isTCP,
 			SourceReady: s.source != nil,
+			PacketsSent: s.packetsSent.Load(),
+			BytesSent:   bytes,
+			DurationSec: durSec,
+			BitrateKbps: kbps,
 		})
 	}
 	return out
@@ -416,6 +436,8 @@ func (s *Session) loop() {
 			ps := PackVideoPES(frame, wallClock)
 			pkts := RTPPacketizePS(ps, s.ssrcNum, &s.seq, rtpTS, 96, s.payload)
 			for _, pkt := range pkts {
+				s.packetsSent.Add(1)
+				s.bytesSent.Add(uint64(len(pkt)))
 				if s.isTCP {
 					if s.tcpConn == nil {
 						return

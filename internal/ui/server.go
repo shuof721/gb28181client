@@ -31,15 +31,19 @@ func New(dev *device.Device, cfg *config.Config) *Server {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("/", s.handleIndex)
+	s.mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir(device.AssetsDir))))
 	s.mux.HandleFunc("/api/status", s.handleStatus)
 	s.mux.HandleFunc("/api/logs", s.handleLogs)
 	s.mux.HandleFunc("/api/register", s.handleRegister)
+	s.mux.HandleFunc("/api/unregister", s.handleUnregister)
 	s.mux.HandleFunc("/api/keepalive", s.handleKeepalive)
 	s.mux.HandleFunc("/api/alarm", s.handleAlarm)
 	s.mux.HandleFunc("/api/session/stop", s.handleStopSession)
 	s.mux.HandleFunc("/api/videos", s.handleVideos)
 	s.mux.HandleFunc("/api/videos/upload", s.handleUpload)
+	s.mux.HandleFunc("/api/videos/delete", s.handleDeleteVideo)
 	s.mux.HandleFunc("/api/channels/add", s.handleAddChannel)
+	s.mux.HandleFunc("/api/channels/update", s.handleUpdateChannel)
 	s.mux.HandleFunc("/api/channels/remove", s.handleRemoveChannel)
 	s.mux.HandleFunc("/api/channels/bind", s.handleBindChannel)
 	s.mux.HandleFunc("/api/media/mode", s.handleMediaMode)
@@ -98,6 +102,18 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]string{"ok": "registered"})
 }
 
+func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	if err := s.dev.UnregisterNow(); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]string{"ok": "unregistered"})
+}
+
 func (s *Server) handleKeepalive(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, 405, "POST only")
@@ -115,20 +131,49 @@ func (s *Server) handleAlarm(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, "POST only")
 		return
 	}
-	ch := r.URL.Query().Get("channel")
-	if ch == "" {
+	var req struct {
+		ChannelID   string `json:"channelId"`
+		AlarmMethod string `json:"alarmMethod"`
+		Priority    string `json:"priority"`
+		Description string `json:"description"`
+	}
+	if strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	if req.ChannelID == "" {
+		req.ChannelID = r.URL.Query().Get("channel")
+	}
+	if req.ChannelID == "" {
 		st := s.dev.Status()
 		if len(st.Channels) == 0 {
 			writeErr(w, 400, "no channels")
 			return
 		}
-		ch = st.Channels[0].ID
+		req.ChannelID = st.Channels[0].ID
 	}
-	if err := s.dev.SendAlarm(ch, "UI trigger"); err != nil {
+	if req.AlarmMethod == "" {
+		req.AlarmMethod = r.URL.Query().Get("method")
+		if req.AlarmMethod == "" {
+			req.AlarmMethod = "2" // 默认移动侦测
+		}
+	}
+	if req.Priority == "" {
+		req.Priority = r.URL.Query().Get("priority")
+		if req.Priority == "" {
+			req.Priority = "4"
+		}
+	}
+	if req.Description == "" {
+		req.Description = r.URL.Query().Get("desc")
+		if req.Description == "" {
+			req.Description = "Web 控制台模拟报警"
+		}
+	}
+	if err := s.dev.SendAlarmAdvanced(req.ChannelID, req.AlarmMethod, req.Priority, req.Description); err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]string{"ok": "alarm sent", "channel": ch})
+	writeJSON(w, 200, map[string]string{"ok": "alarm sent", "channel": req.ChannelID})
 }
 
 func (s *Server) handleStopSession(w http.ResponseWriter, r *http.Request) {
@@ -215,6 +260,30 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleDeleteVideo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		var req struct {
+			Name string `json:"name"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		name = req.Name
+	}
+	if name == "" {
+		writeErr(w, 400, "缺少 name 参数")
+		return
+	}
+	if err := s.dev.DeleteVideo(name); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]string{"ok": "deleted", "name": name})
+}
+
 func (s *Server) handleAddChannel(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, 405, "POST only")
@@ -230,6 +299,23 @@ func (s *Server) handleAddChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"ok": "added", "id": req.ID})
+}
+
+func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	var req device.UpdateChannelRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if err := s.dev.UpdateChannel(req); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]string{"ok": "updated", "id": req.ID})
 }
 
 func (s *Server) handleRemoveChannel(w http.ResponseWriter, r *http.Request) {
