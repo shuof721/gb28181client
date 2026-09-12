@@ -12,6 +12,9 @@ dev.err
 plat.log
 plat.err
 
+# data storage
+data/**/*.tmp
+
 # assets：默认不入库大媒体/缓存，仅白名单示例文件
 # 之后往 assets 里放 3.mp4、4.mp4 等都不会被 git 跟踪
 assets/*

@@ -5,15 +5,15 @@ const indexHTML = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>GB28181 模拟设备管理工作台</title>
+<title>GB28181 多设备模拟与管控平台</title>
 <style>
 :root{
-  --bg-dark:#090d14;
-  --bg:#0f1522;
+  --bg-dark:#080c14;
+  --bg:#0e1422;
   --surface:#151d2d;
   --surface-hover:#1c273c;
-  --surface-2:#1e293b;
-  --surface-3:#29374e;
+  --surface-2:#1c263a;
+  --surface-3:#27364f;
   --border:rgba(255,255,255,0.08);
   --border-focus:rgba(59,130,246,0.6);
   --text-main:#f1f5f9;
@@ -52,8 +52,7 @@ body{
   -webkit-font-smoothing:antialiased;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar{width:7px;height:7px}
 ::-webkit-scrollbar-track{background:rgba(0,0,0,0.15)}
 ::-webkit-scrollbar-thumb{background:var(--surface-3);border-radius:4px}
 ::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.25)}
@@ -63,7 +62,7 @@ body{
   position:sticky;top:0;z-index:40;
   display:flex;align-items:center;justify-content:space-between;gap:16px;
   padding:0 28px;height:64px;
-  background:rgba(15,21,34,0.88);
+  background:rgba(14,20,34,0.92);
   backdrop-filter:blur(16px);
   border-bottom:1px solid var(--border);
 }
@@ -79,41 +78,36 @@ body{
 .brand-info .ver{display:inline-block;font-size:11px;color:var(--text-muted);font-weight:400}
 .header-actions{display:flex;align-items:center;gap:10px}
 
-/* Pills & Badges */
+/* Badges */
 .badge{
   display:inline-flex;align-items:center;gap:6px;
-  padding:4px 10px;border-radius:999px;
-  font-size:12px;font-weight:500;
+  padding:3px 8px;border-radius:999px;
+  font-size:11px;font-weight:500;
   background:var(--surface-2);border:1px solid var(--border);
   color:var(--text-muted);
 }
-.badge .dot{width:8px;height:8px;border-radius:50%;background:var(--text-dim)}
+.badge .dot{width:7px;height:7px;border-radius:50%;background:var(--text-dim)}
 .badge.on{
   background:rgba(16,185,129,0.12);border-color:rgba(16,185,129,0.3);color:#6ee7b7;
 }
 .badge.on .dot{
-  background:var(--ok);box-shadow:0 0 8px var(--ok);animation:pulse 2s infinite;
+  background:var(--ok);box-shadow:0 0 6px var(--ok);animation:pulse 2s infinite;
 }
 .badge.off{
   background:rgba(244,63,94,0.1);border-color:rgba(244,63,94,0.25);color:#fda4af;
 }
 .badge.off .dot{background:var(--err)}
+.badge.stopped{
+  background:rgba(148,163,184,0.1);border-color:rgba(148,163,184,0.2);color:#94a3b8;
+}
 .badge.live{
   background:rgba(16,185,129,0.15);border-color:rgba(16,185,129,0.35);color:#a7f3d0;
 }
 .badge.live .dot{background:var(--ok);box-shadow:0 0 6px var(--ok)}
-.badge.playback{
-  background:rgba(99,102,241,0.12);border-color:rgba(99,102,241,0.3);color:#a5b4fc;
-}
-.badge.playback .dot{background:#818cf8;box-shadow:0 0 6px #818cf8}
-.badge.download{
-  background:rgba(6,182,212,0.12);border-color:rgba(6,182,212,0.3);color:#67e8f9;
-}
-.badge.download .dot{background:#22d3ee;box-shadow:0 0 6px #22d3ee}
-.badge.paused{
+.badge.warn{
   background:rgba(245,158,11,0.12);border-color:rgba(245,158,11,0.3);color:#fcd34d;
 }
-.badge.paused .dot{background:#fbbf24}
+.badge.warn .dot{background:var(--warn)}
 
 @keyframes pulse{
   0%,100%{opacity:1;transform:scale(1)}
@@ -122,16 +116,16 @@ body{
 
 /* Layout */
 .container{
-  max-width:1380px;margin:0 auto;padding:24px 24px 60px;
+  max-width:1440px;margin:0 auto;padding:20px 24px 60px;
   display:flex;flex-direction:column;gap:20px;
 }
 
-/* Common Buttons */
+/* Buttons */
 .btn{
   display:inline-flex;align-items:center;justify-content:center;gap:6px;
   background:var(--surface-2);color:var(--text-main);
   border:1px solid var(--border);border-radius:var(--radius-sm);
-  padding:7px 14px;font-size:12px;font-weight:500;cursor:pointer;
+  padding:6px 12px;font-size:12px;font-weight:500;cursor:pointer;
   transition:all 0.15s ease;user-select:none;
 }
 .btn:hover{background:var(--surface-3);border-color:rgba(255,255,255,0.15)}
@@ -152,452 +146,657 @@ body{
   background:rgba(244,63,94,0.12);border-color:rgba(244,63,94,0.3);color:#fda4af;
 }
 .btn-danger:hover{background:rgba(244,63,94,0.22);border-color:#f43f5e;color:#fff}
-.btn-sm{padding:4px 9px;font-size:11px}
-.btn-icon{padding:6px;width:30px;height:30px}
+.btn-sm{padding:4px 8px;font-size:11px}
 
-/* Inputs & Form Elements */
-input[type=text],select{
+/* Form Elements */
+input[type=text],input[type=number],input[type=password],select,textarea{
   background:var(--surface);color:var(--text-main);
   border:1px solid var(--border);border-radius:var(--radius-sm);
-  padding:7px 12px;font-size:12px;outline:none;
+  padding:7px 10px;font-size:12px;outline:none;
   transition:border-color 0.15s ease,box-shadow 0.15s ease;
+  width:100%;
 }
-input[type=text]:focus,select:focus{
+input:focus,select:focus,textarea:focus{
   border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow);
 }
-input[type=text]{width:100%}
 select{cursor:pointer}
 
 /* Stats Cards */
 .stats-grid{
-  display:grid;grid-template-columns:repeat(6,1fr);gap:14px;
+  display:grid;grid-template-columns:repeat(4,1fr);gap:14px;
 }
-@media (max-width:1180px){.stats-grid{grid-template-columns:repeat(3,1fr)}}
-@media (max-width:680px){.stats-grid{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:960px){.stats-grid{grid-template-columns:repeat(2,1fr)}}
 .stat-card{
   background:var(--surface);border:1px solid var(--border);
-  border-radius:var(--radius);padding:14px 16px;
-  display:flex;flex-direction:column;gap:6px;position:relative;overflow:hidden;
-  transition:border-color 0.2s ease,transform 0.2s ease;
+  border-radius:var(--radius);padding:12px 16px;
+  display:flex;flex-direction:column;gap:4px;
+  transition:border-color 0.2s ease;
 }
-.stat-card:hover{border-color:rgba(255,255,255,0.15);transform:translateY(-1px)}
+.stat-card:hover{border-color:rgba(255,255,255,0.15)}
 .stat-label{
   font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;
-  color:var(--text-dim);display:flex;align-items:center;justify-content:space-between;
+  color:var(--text-dim);
 }
 .stat-val{
-  font-size:18px;font-weight:700;color:#fff;
-  font-family:var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-size:20px;font-weight:700;color:#fff;
+  font-family:var(--font-mono);
 }
-.stat-val.sm{font-size:13px;font-weight:500;color:var(--text-muted)}
-.stat-sub{font-size:11px;color:var(--text-dim)}
 
-/* Top Quick Actions Bar */
-.action-bar{
-  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
-  padding:14px 18px;display:flex;align-items:center;justify-content:space-between;
-  flex-wrap:wrap;gap:12px;
+/* Section Header */
+.section-head{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  margin-bottom:12px;flex-wrap:wrap;
 }
-.action-group{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.section-title{
+  font-size:14px;font-weight:700;letter-spacing:0.03em;
+  text-transform:uppercase;color:var(--text-main);
+  display:flex;align-items:center;gap:8px;
+}
 
-/* Panels */
+/* Device Card Grid */
+.device-grid{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;
+}
+.device-card{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);padding:14px 16px;
+  display:flex;flex-direction:column;gap:12px;position:relative;
+  transition:all 0.2s ease;cursor:pointer;
+}
+.device-card:hover{border-color:rgba(255,255,255,0.2);transform:translateY(-1px)}
+.device-card.active{
+  border-color:var(--accent);
+  box-shadow:0 0 16px var(--accent-glow);
+}
+.device-card.active::after{
+  content:"当前选中";position:absolute;top:12px;right:14px;
+  font-size:10px;font-weight:600;color:#93c5fd;background:rgba(59,130,246,0.2);
+  padding:2px 6px;border-radius:4px;border:1px solid rgba(59,130,246,0.4);
+}
+.device-card-head{display:flex;align-items:flex-start;gap:10px}
+.device-icon{
+  width:34px;height:34px;border-radius:var(--radius-sm);
+  background:var(--surface-2);border:1px solid var(--border);
+  display:flex;align-items:center;justify-content:center;
+  color:#93c5fd;flex-shrink:0;
+}
+.device-card-title{min-width:0;flex:1}
+.device-card-name{font-size:14px;font-weight:700;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.device-card-id{font-size:11px;font-family:var(--font-mono);color:var(--text-dim)}
+
+.device-meta-grid{
+  display:grid;grid-template-columns:repeat(2,1fr);gap:8px;
+  background:var(--surface-2);border-radius:var(--radius-sm);padding:8px 10px;
+  font-size:11px;
+}
+.meta-item{display:flex;flex-direction:column;gap:2px}
+.meta-k{color:var(--text-dim)}
+.meta-v{font-weight:600;color:var(--text-main);font-family:var(--font-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.device-card-actions{
+  display:flex;align-items:center;gap:6px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:10px;
+}
+
+/* Workbench Panel */
 .panel{
   background:var(--surface);border:1px solid var(--border);
   border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);
   overflow:hidden;display:flex;flex-direction:column;
 }
 .panel-head{
-  padding:14px 20px;background:rgba(255,255,255,0.02);
+  padding:12px 18px;background:rgba(255,255,255,0.02);
   border-bottom:1px solid var(--border);
   display:flex;align-items:center;justify-content:space-between;gap:12px;
+  flex-wrap:wrap;
 }
-.panel-head h2{
-  margin:0;font-size:13px;font-weight:700;letter-spacing:0.04em;
-  text-transform:uppercase;color:var(--text-main);
-  display:flex;align-items:center;gap:8px;
+.tab-group{display:flex;gap:4px;background:var(--surface-2);padding:3px;border-radius:var(--radius-sm);border:1px solid var(--border)}
+.tab-btn{
+  padding:5px 12px;font-size:12px;font-weight:500;border-radius:4px;border:none;
+  background:transparent;color:var(--text-muted);cursor:pointer;transition:all 0.15s ease;
 }
-.panel-body{padding:18px 20px}
-.panel-body.tight{padding:0}
+.tab-btn:hover{color:#fff}
+.tab-btn.active{background:var(--accent);color:#fff;box-shadow:0 1px 4px rgba(0,0,0,0.3)}
+
+.panel-body{padding:18px}
 
 /* Two-column layout */
 .main-grid{
-  display:grid;grid-template-columns:1.5fr 1fr;gap:20px;align-items:start;
+  display:grid;grid-template-columns:1.4fr 1fr;gap:20px;align-items:start;
 }
 @media (max-width:1080px){.main-grid{grid-template-columns:1fr}}
 
-/* Channel Cards Grid */
+/* Channel Cards */
 .channel-grid{
-  display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:14px;
-  padding:18px 20px;
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;
 }
 .ch-card{
   background:var(--surface-2);border:1px solid var(--border);
-  border-radius:var(--radius);padding:14px 16px;
-  display:flex;flex-direction:column;gap:12px;position:relative;
-  transition:all 0.2s ease;
+  border-radius:var(--radius);padding:12px 14px;
+  display:flex;flex-direction:column;gap:10px;position:relative;
 }
-.ch-card:hover{border-color:rgba(255,255,255,0.18)}
 .ch-card.live{
   border-color:rgba(16,185,129,0.45);
-  box-shadow:0 0 16px rgba(16,185,129,0.12);
+  box-shadow:0 0 16px rgba(16,185,129,0.1);
 }
-.ch-card.live::before{
-  content:"";position:absolute;left:0;top:0;bottom:0;width:3px;
-  background:var(--ok);border-radius:var(--radius) 0 0 var(--radius);
-}
-.ch-header{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
-.ch-title{min-width:0;flex:1}
-.ch-name{font-size:14px;font-weight:700;color:#fff;display:flex;align-items:center;gap:6px}
-.ch-id{
-  font-family:var(--font-mono);font-size:11px;color:var(--text-dim);
-  margin-top:2px;display:flex;align-items:center;gap:6px;
-}
-.copy-btn{
-  background:none;border:none;padding:0;color:var(--text-dim);cursor:pointer;
-  display:inline-flex;align-items:center;transition:color 0.15s ease;
-}
-.copy-btn:hover{color:var(--text-main)}
-.ch-meta{
-  display:grid;grid-template-columns:60px 1fr;gap:6px 10px;
-  font-size:12px;background:rgba(0,0,0,0.16);padding:8px 10px;border-radius:var(--radius-sm);
-}
-.ch-meta span{color:var(--text-dim)}
-.ch-meta b{color:var(--text-main);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ch-live-bar{
-  background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);
-  border-radius:var(--radius-sm);padding:8px 10px;
-  display:flex;align-items:center;justify-content:space-between;gap:8px;
-}
-.ch-actions{
-  display:flex;align-items:center;justify-content:space-between;gap:8px;
-  padding-top:6px;border-top:1px dashed var(--border);
-}
+.ch-header{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.ch-name{font-size:13px;font-weight:700;color:#fff}
+.ch-id{font-size:11px;font-family:var(--font-mono);color:var(--text-dim)}
 
-/* Tables */
-.table-wrap{width:100%;overflow-x:auto}
-table.custom-tbl{width:100%;border-collapse:collapse;font-size:12px;text-align:left}
-table.custom-tbl th{
-  background:rgba(0,0,0,0.25);color:var(--text-dim);
-  font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;
-  padding:10px 16px;border-bottom:1px solid var(--border);
-}
-table.custom-tbl td{
-  padding:10px 16px;border-bottom:1px solid var(--border);
-  color:var(--text-main);vertical-align:middle;
-}
-table.custom-tbl tr:last-child td{border-bottom:none}
-table.custom-tbl tr:hover td{background:rgba(255,255,255,0.02)}
-.empty-msg{padding:28px 16px;text-align:center;color:var(--text-dim);font-size:12px}
-
-/* Log Console */
-.log-panel{background:var(--bg-dark);border-radius:0 0 var(--radius-lg) var(--radius-lg)}
-.log-toolbar{
-  padding:12px 18px;background:var(--surface);
-  border-bottom:1px solid var(--border);
-  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;
-}
-.log-tags{display:flex;align-items:center;gap:6px}
-.log-tag-btn{
-  font-size:11px;padding:3px 8px;border-radius:4px;
-  border:1px solid var(--border);background:transparent;
-  color:var(--text-muted);cursor:pointer;
-}
-.log-tag-btn.active{
-  background:var(--surface-3);border-color:var(--accent);color:#fff;
-}
-.log-box{
-  margin:0;height:340px;overflow-y:auto;
-  padding:12px 16px;font-family:var(--font-mono);font-size:11.5px;line-height:1.6;
-  color:#cbd5e1;background:#080c12;white-space:pre-wrap;word-break:break-all;
-}
-.log-line{display:flex;gap:8px;padding:1px 0}
-.log-ts{color:#475569;flex-shrink:0}
-.log-tag{
-  padding:0 5px;border-radius:3px;font-size:10px;font-weight:600;
-  display:inline-block;flex-shrink:0;
-}
-.log-tag.sip{background:rgba(59,130,246,0.25);color:#93c5fd}
-.log-tag.media{background:rgba(168,85,247,0.25);color:#d8b4fe}
-.log-tag.gb{background:rgba(16,185,129,0.25);color:#6ee7b7}
-.log-tag.device{background:rgba(245,158,11,0.25);color:#fde68a}
-.log-tag.ui{background:rgba(6,182,212,0.25);color:#a5f3fc}
-.log-tag.err{background:rgba(244,63,94,0.3);color:#fca5a5}
-
-/* Video Items */
-.video-card-list{display:flex;flex-direction:column;gap:8px;max-height:260px;overflow-y:auto}
-.video-card-item{
+/* Session Items */
+.session-item{
+  background:var(--surface-2);border:1px solid var(--border);
+  border-radius:var(--radius);padding:10px 12px;
   display:flex;align-items:center;justify-content:space-between;gap:12px;
-  background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);
-  padding:8px 12px;transition:border-color 0.15s ease;
+  margin-bottom:8px;
 }
-.video-card-item:hover{border-color:rgba(255,255,255,0.15)}
-.video-file-info{min-width:0;flex:1;display:flex;align-items:center;gap:10px}
-.video-format-pill{
-  font-size:10px;font-weight:700;padding:2px 5px;border-radius:4px;
-  text-transform:uppercase;background:rgba(59,130,246,0.18);color:#93c5fd;
+
+/* Log Box */
+.log-box{
+  background:#090d15;border:1px solid var(--border);border-radius:var(--radius);
+  padding:10px 12px;height:340px;overflow-y:auto;
+  font-family:var(--font-mono);font-size:11px;line-height:1.6;
 }
-.video-format-pill.h264{background:rgba(168,85,247,0.18);color:#d8b4fe}
+.log-line{display:flex;gap:8px;padding:2px 0;word-break:break-all}
+.log-tag{padding:1px 5px;border-radius:3px;font-size:10px;font-weight:600;flex-shrink:0}
+.log-tag.sip{background:rgba(59,130,246,0.15);color:#93c5fd}
+.log-tag.media{background:rgba(168,85,247,0.15);color:#d8b4fe}
+.log-tag.gb{background:rgba(16,185,129,0.15);color:#6ee7b7}
+.log-tag.err{background:rgba(244,63,94,0.2);color:#fda4af}
 
 /* Modals */
-.modal-overlay{
-  position:fixed;inset:0;z-index:90;
-  background:rgba(0,0,0,0.72);backdrop-filter:blur(6px);
-  display:none;align-items:center;justify-content:center;padding:20px;
+.modal-mask{
+  position:fixed;inset:0;background:rgba(0,0,0,0.7);backdrop-filter:blur(6px);
+  display:none;align-items:center;justify-content:center;z-index:100;
+  padding:16px;
 }
-.modal-overlay.open{display:flex}
+.modal-mask.open{display:flex}
 .modal-box{
-  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);
-  box-shadow:var(--shadow-lg);width:100%;max-width:520px;overflow:hidden;
-  animation:modalFade 0.18s ease-out;
+  background:var(--surface);border:1px solid rgba(255,255,255,0.15);
+  border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);
+  max-width:680px;width:100%;max-height:90vh;display:flex;flex-direction:column;
+  overflow:hidden;animation:modalIn 0.2s cubic-bezier(0.16,1,0.3,1);
 }
-@keyframes modalFade{
+@keyframes modalIn{
   from{opacity:0;transform:scale(0.96)}
   to{opacity:1;transform:scale(1)}
 }
 .modal-head{
-  padding:16px 20px;background:rgba(255,255,255,0.03);border-bottom:1px solid var(--border);
+  padding:14px 20px;border-bottom:1px solid var(--border);
   display:flex;align-items:center;justify-content:space-between;
 }
-.modal-head h3{margin:0;font-size:14px;font-weight:700;color:#fff}
-.modal-close{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px}
-.modal-close:hover{color:#fff}
-.modal-body{padding:20px}
+.modal-head h3{margin:0;font-size:15px;font-weight:700;color:#fff}
+.modal-body{padding:18px 20px;overflow-y:auto;display:flex;flex-direction:column;gap:14px}
 .modal-foot{
-  padding:14px 20px;background:rgba(0,0,0,0.18);border-top:1px solid var(--border);
-  display:flex;justify-content:flex-end;gap:10px;
+  padding:12px 20px;border-top:1px solid var(--border);
+  display:flex;align-items:center;justify-content:flex-end;gap:10px;
+  background:rgba(0,0,0,0.15);
 }
-.form-group{margin-bottom:14px}
-.form-group label{display:block;font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:6px}
-.form-group .hint{font-size:11px;color:var(--text-dim);margin-top:4px}
+
+.form-group{display:flex;flex-direction:column;gap:5px}
+.form-label{font-size:11px;font-weight:600;color:var(--text-muted);display:flex;align-items:center;justify-content:space-between}
+.form-grid-2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.form-grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
 
 /* Toast */
-.toast-container{
-  position:fixed;top:20px;right:20px;z-index:100;
+.toast-box{
+  position:fixed;bottom:24px;right:24px;z-index:110;
   display:flex;flex-direction:column;gap:8px;pointer-events:none;
 }
 .toast{
-  pointer-events:auto;min-width:260px;max-width:380px;
-  background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);
-  box-shadow:var(--shadow);padding:10px 14px;display:flex;align-items:center;gap:10px;
-  animation:toastSlide 0.2s ease-out;font-size:12px;color:var(--text-main);
+  background:var(--surface-3);color:#fff;border:1px solid var(--border);
+  padding:9px 14px;border-radius:var(--radius-sm);box-shadow:var(--shadow);
+  font-size:12px;font-weight:500;display:flex;align-items:center;gap:8px;
+  animation:toastIn 0.2s ease;pointer-events:auto;
 }
-@keyframes toastSlide{
-  from{transform:translateX(50px);opacity:0}
-  to{transform:translateX(0);opacity:1}
-}
-.toast.success{border-color:rgba(16,185,129,0.4);background:#0d261e;color:#6ee7b7}
-.toast.error{border-color:rgba(244,63,94,0.4);background:#2c1216;color:#fca5a5}
-.toast.info{border-color:rgba(59,130,246,0.4);background:#10223f;color:#93c5fd}
+@keyframes toastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.toast.success{border-color:rgba(16,185,129,0.5);background:#064e3b}
+.toast.error{border-color:rgba(244,63,94,0.5);background:#881337}
+.toast.info{border-color:rgba(59,130,246,0.5);background:#1e3a8a}
 
-/* Video Player Modal Special Size */
-.modal-box.video-modal{max-width:800px}
-.video-preview-player{
-  width:100%;height:auto;max-height:480px;background:#000;border-radius:var(--radius-sm);
-  outline:none;display:block;
+/* Video item in library */
+.video-card-item{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:8px 10px;background:var(--surface-2);border-radius:var(--radius-sm);
+  margin-bottom:6px;border:1px solid var(--border);
 }
 </style>
 </head>
 <body>
 
-<!-- Header -->
 <header class="header">
   <div class="brand">
     <div class="brand-icon">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
-      </svg>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
     </div>
     <div class="brand-info">
-      <h1>GB28181 模拟设备工作台</h1>
-      <span class="ver">NVR 多通道 · PS/RTP 实时媒体 · 2016 规范</span>
+      <h1>GB28181 多设备模拟管控平台</h1>
+      <div class="ver">GB/T 28181-2016 模拟器 · 纯 JSON 持久化版</div>
     </div>
   </div>
-
   <div class="header-actions">
-    <div id="modeBadge" class="badge">媒体模式 —</div>
-    <div id="liveBadge" class="badge"><span class="dot"></span><span>0 路点播中</span></div>
-    <div id="regBadge" class="badge off"><span class="dot"></span><span>检测中</span></div>
+    <button class="btn btn-primary" onclick="openNewDeviceModal()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> 新建模拟设备
+    </button>
+    <button class="btn btn-success btn-sm" onclick="startAllDevices()">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg> 全部启动
+    </button>
+    <button class="btn btn-danger btn-sm" onclick="stopAllDevices()">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12"/></svg> 全部停止
+    </button>
+    <button class="btn btn-sm" onclick="openVideosModal()">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg> 公共视频库
+    </button>
+    <button class="btn btn-sm" onclick="refreshAll(true)" title="刷新状态">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+    </button>
   </div>
 </header>
 
 <div class="container">
-  <!-- Metrics KPI Banner -->
-  <section class="stats-grid" id="statsGrid"></section>
 
-  <!-- Quick Actions Bar -->
-  <section class="action-bar">
-    <div class="action-group">
-      <button class="btn btn-primary" onclick="reqRegister()">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-        立即注册
-      </button>
-      <button class="btn btn-danger" onclick="reqUnregister()">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
-        注销
-      </button>
-      <button class="btn" onclick="reqKeepalive()">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-        发送心跳
-      </button>
-      <button class="btn" onclick="openAlarmModal()">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-        模拟报警上报
-      </button>
-      <button class="btn" onclick="refreshAll(true)">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-        刷新
-      </button>
+  <!-- Overview Stats -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-label">模拟设备总数</div>
+      <div class="stat-val" id="statTotalDevices">-</div>
     </div>
-    <div style="font-size:12px;color:var(--text-dim)">
-      💡 提示：在 WVP / 国标平台点击通道播放发起 INVITE，设备将向流媒体服务器推送 PS/RTP 流。
+    <div class="stat-card">
+      <div class="stat-label">运行中 / 已注册平台</div>
+      <div class="stat-val" id="statOnlineDevices">-</div>
     </div>
-  </section>
+    <div class="stat-card">
+      <div class="stat-label">总通道数</div>
+      <div class="stat-val" id="statTotalChannels">-</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">当前活跃推流会话</div>
+      <div class="stat-val" id="statTotalSessions">-</div>
+    </div>
+  </div>
 
-  <!-- Main 2-Column: Channels & Side Tools -->
-  <div class="main-grid">
-    <!-- Left Column: Channels -->
-    <div class="panel">
-      <div class="panel-head">
-        <h2>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>
-          通道列表 (<span id="chCount">0</span>)
-        </h2>
-        <div class="action-group">
-          <button class="btn btn-sm btn-primary" onclick="openAddChModal()">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            新增通道
+  <!-- Multi-Device Cards Grid -->
+  <div>
+    <div class="section-head">
+      <div class="section-title">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        模拟设备列表 (点击卡片切换详情)
+      </div>
+      <div style="font-size:12px;color:var(--text-dim)">
+        存储目录：<code>data/devices/*.json</code>（免安装、原子读写）
+      </div>
+    </div>
+    <div class="device-grid" id="deviceGridContainer">
+      <!-- Device Cards rendered here -->
+    </div>
+  </div>
+
+  <!-- Active Device Workbench -->
+  <div class="panel" id="deviceWorkbench">
+    <div class="panel-head">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <h2 id="workbenchTitle">设备管控工作台</h2>
+        <div id="workbenchBadges" style="display:flex;gap:6px"></div>
+      </div>
+      <div class="tab-group">
+        <button class="tab-btn active" onclick="switchWorkbenchTab('channels', this)">通道列表与视频源</button>
+        <button class="tab-btn" onclick="switchWorkbenchTab('sessions', this)">实时点播会话</button>
+        <button class="tab-btn" onclick="switchWorkbenchTab('logs', this)">设备运行日志</button>
+      </div>
+    </div>
+
+    <!-- Tab 1: Channels -->
+    <div class="panel-body" id="tabChannels">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:12px;color:var(--text-muted)">媒体分发模式:</span>
+          <button class="btn btn-sm" id="btnModeShared" onclick="setDeviceMediaMode('shared')">全通道共用</button>
+          <button class="btn btn-sm" id="btnModePerChannel" onclick="setDeviceMediaMode('per_channel')">按通道独立指定</button>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-sm btn-primary" onclick="openAddChannelModal()">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> 新增通道
           </button>
+          <button class="btn btn-sm" onclick="triggerManualRegister()">立即重新注册</button>
+          <button class="btn btn-sm" onclick="triggerManualKeepalive()">发送心跳</button>
+          <button class="btn btn-sm btn-danger" onclick="openAlarmModal()">模拟报警</button>
         </div>
       </div>
-      <div class="channel-grid" id="chGrid">
-        <div class="empty-msg">加载中…</div>
+      <div class="channel-grid" id="channelListContainer">
+        <!-- Channel cards rendered here -->
       </div>
     </div>
 
-    <!-- Right Column: Media Mode & Video Library -->
-    <div style="display:flex;flex-direction:column;gap:20px">
-      <!-- Media Mode Card -->
-      <div class="panel">
-        <div class="panel-head">
-          <h2>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M16 12l-4-4-4 4M12 8v8"/></svg>
-            推流模式设置
-          </h2>
+    <!-- Tab 2: Sessions -->
+    <div class="panel-body" id="tabSessions" style="display:none">
+      <div id="sessionListContainer">
+        <!-- Sessions rendered here -->
+      </div>
+    </div>
+
+    <!-- Tab 3: Logs -->
+    <div class="panel-body" id="tabLogs" style="display:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:8px;flex:1;max-width:320px">
+          <input type="text" id="logKeyword" placeholder="输入关键字过滤日志..." onkeydown="if(event.key==='Enter')loadLogs()"/>
+          <button class="btn btn-sm" onclick="loadLogs()">搜索</button>
         </div>
-        <div class="panel-body" style="display:flex;flex-direction:column;gap:12px">
-          <div style="display:flex;gap:10px">
-            <button class="btn" id="btnModeShared" onclick="setMediaMode('shared')" style="flex:1">全通道共用媒体</button>
-            <button class="btn" id="btnModePer" onclick="setMediaMode('per_channel')" style="flex:1">按通道独立绑定</button>
-          </div>
-          <div style="font-size:11.5px;color:var(--text-dim);line-height:1.5">
-            <b>全通道共用</b>：所有通道点播时均使用全局配置的默认视频。<br/>
-            <b>按通道独立</b>：各通道可自由绑定不同视频文件，互不干扰。卡片内绑定视频后会自动切换到此模式。
-          </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <label style="font-size:11px;color:var(--text-dim);display:flex;align-items:center;gap:4px">
+            <input type="checkbox" id="autoScroll" checked/> 自动滚到底部
+          </label>
+          <button class="btn btn-sm" onclick="exportLogs()">导出日志</button>
         </div>
       </div>
-
-      <!-- Video Assets Library -->
-      <div class="panel">
-        <div class="panel-head">
-          <h2>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
-            视频资产库
-          </h2>
-        </div>
-        <div class="panel-body" style="display:flex;flex-direction:column;gap:14px">
-          <div style="display:flex;gap:8px">
-            <input type="file" id="uploadInput" accept=".mp4,.h264,.264" style="display:none" onchange="handleFileSelected()"/>
-            <input type="text" id="uploadFileName" placeholder="选择 .mp4 / .h264 视频文件" readonly onclick="document.getElementById('uploadInput').click()" style="cursor:pointer"/>
-            <button class="btn btn-primary" id="uploadBtn" onclick="uploadVideoFile()">上传</button>
-          </div>
-          <div id="videoListContainer" class="video-card-list">
-            <div class="empty-msg">暂无视频文件</div>
-          </div>
-          <div style="font-size:11px;color:var(--text-dim)">
-            📁 文件将保存至工作目录 <code>assets/</code>；首次点播 MP4 会自动调用 ffmpeg 抽取无 B 帧 Baseline H.264 缓存。
-          </div>
-        </div>
+      <div class="log-box" id="logBox">
+        <!-- Logs rendered here -->
       </div>
     </div>
   </div>
 
-  <!-- Live Sessions Stream Table -->
-  <section class="panel">
-    <div class="panel-head">
-      <h2>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-        点播会话与流媒体推流监控
-      </h2>
-      <span style="font-size:11px;color:var(--text-dim)" id="sessStatsSummary">0 个活动会话</span>
-    </div>
-    <div class="table-wrap">
-      <table class="custom-tbl">
-        <thead>
-          <tr>
-            <th>通道编号</th>
-            <th>类型</th>
-            <th>SSRC (国标点播)</th>
-            <th>对端媒体接收地址</th>
-            <th>传输模式</th>
-            <th>推流时长</th>
-            <th>发包总量</th>
-            <th>实时码率</th>
-            <th>状态</th>
-            <th style="width:80px;text-align:center">操作</th>
-          </tr>
-        </thead>
-        <tbody id="sessTbody">
-          <tr><td colspan="10"><div class="empty-msg">当前没有活跃的点播推流会话</div></td></tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
-
-  <!-- Log Console -->
-  <section class="panel">
-    <div class="panel-head">
-      <h2>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-        运行与信令日志
-      </h2>
-      <div class="action-group">
-        <label style="font-size:11px;color:var(--text-dim);display:flex;align-items:center;gap:4px;cursor:pointer">
-          <input type="checkbox" id="autoScroll" checked/> 自动滚动
-        </label>
-        <button class="btn btn-sm" onclick="exportLogFile()">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          导出日志
-        </button>
-      </div>
-    </div>
-    <div class="log-panel">
-      <div class="log-toolbar">
-        <div class="log-tags">
-          <button class="log-tag-btn active" onclick="setLogCategory('all')">全部</button>
-          <button class="log-tag-btn" onclick="setLogCategory('sip')">SIP 信令</button>
-          <button class="log-tag-btn" onclick="setLogCategory('media')">流媒体</button>
-          <button class="log-tag-btn" onclick="setLogCategory('gb')">GB28181</button>
-          <button class="log-tag-btn" onclick="setLogCategory('err')">错误异常</button>
-        </div>
-        <div style="display:flex;align-items:center;gap:6px;width:min(320px,100%)">
-          <input type="text" id="logKeyword" placeholder="回车筛选日志，如 INVITE / ACK / error" onkeydown="if(event.key==='Enter')loadLogs()"/>
-          <button class="btn btn-sm" onclick="clearLogSearch()">清空</button>
-        </div>
-      </div>
-      <div id="logBox" class="log-box">加载日志中…</div>
-    </div>
-  </section>
 </div>
 
-<!-- Video Preview Modal -->
-<div class="modal-overlay" id="videoModal">
-  <div class="modal-box video-modal">
+<!-- Modal: New Device -->
+<div class="modal-mask" id="newDeviceModal">
+  <div class="modal-box">
     <div class="modal-head">
-      <h3 id="videoModalTitle">视频在线预览</h3>
-      <button class="modal-close" onclick="closeVideoModal()">&times;</button>
+      <h3>新建 GB28181 模拟设备</h3>
+      <button class="btn btn-sm" onclick="closeModal('newDeviceModal')">✕</button>
     </div>
-    <div class="modal-body" style="padding:14px">
-      <video id="previewPlayer" class="video-preview-player" controls autoplay loop playsinline></video>
+    <div class="modal-body">
+      <div class="form-grid-2">
+        <div class="form-group">
+          <label class="form-label">设备国标编码 (20位) *</label>
+          <input type="text" id="newDevId" placeholder="例如 34020000001180000002" maxlength="20"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">设备名称 *</label>
+          <input type="text" id="newDevName" placeholder="例如 模拟NVR-02"/>
+        </div>
+      </div>
+      <div class="form-grid-2">
+        <div class="form-group">
+          <label class="form-label">平台 SIP 地址 (WVP IP) *</label>
+          <input type="text" id="newDevServerIp" placeholder="192.168.1.100"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">平台 SIP 端口 *</label>
+          <input type="number" id="newDevServerPort" value="5060"/>
+        </div>
+      </div>
+      <div class="form-grid-3">
+        <div class="form-group">
+          <label class="form-label">本机 SIP IP *</label>
+          <input type="text" id="newDevLocalIp" placeholder="192.168.1.20"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">本机 SIP 端口 (自动推荐)</label>
+          <input type="number" id="newDevLocalPort" placeholder="5071"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">信令传输协议</label>
+          <select id="newDevTransport">
+            <option value="udp">UDP</option>
+            <option value="tcp">TCP</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-grid-2">
+        <div class="form-group">
+          <label class="form-label">SIP 鉴权密码 *</label>
+          <input type="text" id="newDevPassword" value="12345678"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">初始下挂通道数</label>
+          <select id="newDevInitChannels">
+            <option value="1">生成 1 个初始 IPC 通道</option>
+            <option value="2">生成 2 个初始 IPC 通道</option>
+            <option value="4">生成 4 个初始 IPC 通道</option>
+            <option value="0">暂不生成通道</option>
+          </select>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text-dim)">
+        新建后将自动生成独立的 <code>data/devices/{设备ID}.json</code>，可随时自定义。
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal('newDeviceModal')">取消</button>
+      <button class="btn btn-primary" onclick="submitCreateDevice()">立即创建</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Device Full Configuration (Web 端自定义所有参数) -->
+<div class="modal-mask" id="deviceConfigModal">
+  <div class="modal-box" style="max-width:760px">
+    <div class="modal-head">
+      <h3 id="devCfgModalTitle">自定义设备所有信息</h3>
+      <button class="btn btn-sm" onclick="closeModal('deviceConfigModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="tab-group" style="margin-bottom:6px">
+        <button class="tab-btn active" onclick="switchCfgTab('sip', this)">1. 平台 SIP 对接参数</button>
+        <button class="tab-btn" onclick="switchCfgTab('device', this)">2. 设备国标身份</button>
+        <button class="tab-btn" onclick="switchCfgTab('media', this)">3. 默认媒体参数</button>
+      </div>
+
+      <!-- Tab: SIP -->
+      <div id="cfgTabSip" class="cfg-tab-pane">
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label">平台 SIP 服务端 IP</label>
+            <input type="text" id="cfgSipServerIp"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">平台 SIP 服务端端口</label>
+            <input type="number" id="cfgSipServerPort"/>
+          </div>
+        </div>
+        <div class="form-grid-3">
+          <div class="form-group">
+            <label class="form-label">本机 SIP IP (设备地址)</label>
+            <input type="text" id="cfgSipLocalIp"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">本机 SIP 监听端口</label>
+            <input type="number" id="cfgSipLocalPort"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">传输协议</label>
+            <select id="cfgSipTransport">
+              <option value="udp">UDP</option>
+              <option value="tcp">TCP</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label">SIP 注册用户名</label>
+            <input type="text" id="cfgSipUsername"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">SIP 鉴权密码</label>
+            <input type="text" id="cfgSipPassword"/>
+          </div>
+        </div>
+        <div class="form-grid-3">
+          <div class="form-group">
+            <label class="form-label">注册有效期 (秒)</label>
+            <input type="number" id="cfgSipExpires"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">心跳周期 (秒)</label>
+            <input type="number" id="cfgSipKeepalive"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">超时断开次数</label>
+            <input type="number" id="cfgSipTimeoutCount"/>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab: Device -->
+      <div id="cfgTabDevice" class="cfg-tab-pane" style="display:none">
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label">设备国标编号 (20位编码)</label>
+            <input type="text" id="cfgDevId" disabled style="opacity:0.7"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">设备名称</label>
+            <input type="text" id="cfgDevName"/>
+          </div>
+        </div>
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label">行政区划 / 域 (Domain)</label>
+            <input type="text" id="cfgDevDomain"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">设备制造厂商 (Manufacturer)</label>
+            <input type="text" id="cfgDevManufacturer"/>
+          </div>
+        </div>
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label">设备型号 (Model)</label>
+            <input type="text" id="cfgDevModel"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">固件版本 (Firmware)</label>
+            <input type="text" id="cfgDevFirmware"/>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab: Media -->
+      <div id="cfgTabMedia" class="cfg-tab-pane" style="display:none">
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label">媒体模式</label>
+            <select id="cfgMediaMode">
+              <option value="per_channel">按通道独立指定 (per_channel)</option>
+              <option value="shared">全通道共用 (shared)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">全局默认视频源类型</label>
+            <select id="cfgMediaSource">
+              <option value="mp4">本地 MP4 视频文件 (推荐)</option>
+              <option value="file">Annex-B H.264 原生文件</option>
+              <option value="synthetic">内置合成彩条流</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label">全局默认 MP4 路径</label>
+            <input type="text" id="cfgMediaMp4"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">全局默认 H264 路径</label>
+            <input type="text" id="cfgMediaH264"/>
+          </div>
+        </div>
+        <div class="form-grid-3">
+          <div class="form-group">
+            <label class="form-label">分辨率 宽度</label>
+            <input type="number" id="cfgMediaWidth"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">分辨率 高度</label>
+            <input type="number" id="cfgMediaHeight"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">推流帧率 (FPS)</label>
+            <input type="number" id="cfgMediaFps"/>
+          </div>
+        </div>
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label">RTP 负载上限 (Payload Max)</label>
+            <input type="number" id="cfgMediaPayloadMax"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">媒体发送源地址 (Local IP)</label>
+            <input type="text" id="cfgMediaLocalIp"/>
+          </div>
+        </div>
+      </div>
+
+      <input type="hidden" id="cfgActiveDevId"/>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal('deviceConfigModal')">取消</button>
+      <button class="btn btn-primary" onclick="saveDeviceConfig(false)">保存配置 (存入JSON)</button>
+      <button class="btn btn-success" onclick="saveDeviceConfig(true)">保存并重启/重新注册</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Add Channel -->
+<div class="modal-mask" id="addChannelModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>新增下挂 IPC 通道</h3>
+      <button class="btn btn-sm" onclick="closeModal('addChannelModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">通道国标编号 (20位编码) *</label>
+        <input type="text" id="addChId" placeholder="例如 34020000001320000001" maxlength="20"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">通道名称</label>
+        <input type="text" id="addChName" placeholder="例如 通道01"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">绑定点播视频源</label>
+        <select id="addChVideo">
+          <!-- Video options rendered dynamically -->
+        </select>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal('addChannelModal')">取消</button>
+      <button class="btn btn-primary" onclick="submitAddChannel()">确认新增</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Videos Library -->
+<div class="modal-mask" id="videosModal">
+  <div class="modal-box" style="max-width:700px">
+    <div class="modal-head">
+      <h3>公共视频素材库 (assets)</h3>
+      <button class="btn btn-sm" onclick="closeModal('videosModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex;gap:10px;align-items:center;background:var(--surface-2);padding:10px 14px;border-radius:var(--radius-sm);border:1px solid var(--border)">
+        <input type="file" id="uploadInput" accept=".mp4,.h264" style="display:none" onchange="handleFileSelected()"/>
+        <button class="btn btn-sm btn-primary" onclick="document.getElementById('uploadInput').click()">选择本地视频</button>
+        <input type="text" id="uploadFileName" readonly placeholder="未选择文件" style="flex:1"/>
+        <button class="btn btn-sm btn-success" id="uploadBtn" onclick="uploadVideoFile()">上传视频</button>
+      </div>
+      <div id="videoListContainer" style="max-height:380px;overflow-y:auto;margin-top:6px">
+        <!-- Video list rendered here -->
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal('videosModal')">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Video Preview -->
+<div class="modal-mask" id="videoPreviewModal">
+  <div class="modal-box" style="max-width:680px">
+    <div class="modal-head">
+      <h3 id="videoPreviewTitle">在线视频预览</h3>
+      <button class="btn btn-sm" onclick="closeVideoModal()">✕</button>
+    </div>
+    <div class="modal-body" style="padding:10px;background:#000">
+      <video id="previewPlayer" controls style="width:100%;max-height:420px;display:block"></video>
     </div>
     <div class="modal-foot">
       <button class="btn" onclick="closeVideoModal()">关闭</button>
@@ -605,693 +804,710 @@ table.custom-tbl tr:hover td{background:rgba(255,255,255,0.02)}
   </div>
 </div>
 
-<!-- Alarm Modal -->
-<div class="modal-overlay" id="alarmModal">
+<!-- Modal: Alarm -->
+<div class="modal-mask" id="alarmModal">
   <div class="modal-box">
     <div class="modal-head">
-      <h3>模拟国标报警上报 (Alarm Notify)</h3>
-      <button class="modal-close" onclick="closeAlarmModal()">&times;</button>
+      <h3>发送国标模拟报警通知</h3>
+      <button class="btn btn-sm" onclick="closeModal('alarmModal')">✕</button>
     </div>
     <div class="modal-body">
       <div class="form-group">
-        <label>目标通道</label>
-        <select id="alarmChannelSelect" style="width:100%"></select>
+        <label class="form-label">报警通道</label>
+        <select id="alarmChannelSelect"></select>
+      </div>
+      <div class="form-grid-2">
+        <div class="form-group">
+          <label class="form-label">报警方式 (AlarmMethod)</label>
+          <select id="alarmMethodSelect">
+            <option value="2">2 - 移动侦测报警</option>
+            <option value="1">1 - 电话线报警</option>
+            <option value="3">3 - 视频丢失报警</option>
+            <option value="4">4 - 视频遮挡报警</option>
+            <option value="5">5 - 外部探测器报警</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">报警级别 (Priority)</label>
+          <select id="alarmPrioritySelect">
+            <option value="4">4 - 低级 (默认)</option>
+            <option value="3">3 - 中级</option>
+            <option value="2">2 - 高级</option>
+            <option value="1">1 - 一级 (最高)</option>
+          </select>
+        </div>
       </div>
       <div class="form-group">
-        <label>报警方式 (AlarmMethod)</label>
-        <select id="alarmMethodSelect" style="width:100%">
-          <option value="2">2 - 运动目标检测报警 (移动侦测)</option>
-          <option value="1">1 - 人工视频报警</option>
-          <option value="3">3 - 遗留物检测报警</option>
-          <option value="4">4 - 物体移除检测报警</option>
-          <option value="5">5 - 绊线入侵检测报警</option>
-          <option value="6">6 - 区域入侵检测报警</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>报警级别 (AlarmPriority)</label>
-        <select id="alarmPrioritySelect" style="width:100%">
-          <option value="4">4 - 四级 (低)</option>
-          <option value="3">3 - 三级 (中)</option>
-          <option value="2">2 - 二级 (高)</option>
-          <option value="1">1 - 一级 (紧急)</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>报警描述 (AlarmDescription)</label>
-        <input type="text" id="alarmDescInput" value="检测到运动目标异常触发"/>
+        <label class="form-label">报警描述文本</label>
+        <input type="text" id="alarmDescInput" value="Web 控制台触发模拟移动侦测"/>
       </div>
     </div>
     <div class="modal-foot">
-      <button class="btn" onclick="closeAlarmModal()">取消</button>
-      <button class="btn btn-primary" onclick="submitAlarm()">立即上报平台</button>
+      <button class="btn" onclick="closeModal('alarmModal')">取消</button>
+      <button class="btn btn-danger" onclick="submitAlarm()">立即发送报警通知</button>
     </div>
   </div>
 </div>
 
-<!-- Add Channel Modal -->
-<div class="modal-overlay" id="addChModal">
-  <div class="modal-box">
-    <div class="modal-head">
-      <h3>新增模拟通道 (IPC)</h3>
-      <button class="modal-close" onclick="closeAddChModal()">&times;</button>
-    </div>
-    <div class="modal-body">
-      <div class="form-group">
-        <label>通道国标编号 (20位)</label>
-        <input type="text" id="addChId" placeholder="例如 34020000001320000003" maxlength="20"/>
-        <div class="hint">前10位为行业编码，11-13位类型通常为 132(网络摄像机) 或 131。</div>
-      </div>
-      <div class="form-group">
-        <label>通道名称</label>
-        <input type="text" id="addChName" placeholder="例如：东门高点全景枪机"/>
-      </div>
-      <div class="form-group">
-        <label>绑定初始视频</label>
-        <select id="addChVideo" style="width:100%"><option value="">暂不绑定（使用全局默认）</option></select>
-      </div>
-    </div>
-    <div class="modal-foot">
-      <button class="btn" onclick="closeAddChModal()">取消</button>
-      <button class="btn btn-primary" onclick="submitAddChannel()">确认创建</button>
-    </div>
-  </div>
-</div>
-
-<!-- Edit Channel Modal -->
-<div class="modal-overlay" id="editChModal">
-  <div class="modal-box">
-    <div class="modal-head">
-      <h3>编辑通道</h3>
-      <button class="modal-close" onclick="closeEditChModal()">&times;</button>
-    </div>
-    <div class="modal-body">
-      <div class="form-group">
-        <label>通道国标编号</label>
-        <input type="text" id="editChId" readonly style="opacity:0.6;cursor:not-allowed"/>
-      </div>
-      <div class="form-group">
-        <label>通道名称</label>
-        <input type="text" id="editChName" placeholder="通道名称"/>
-      </div>
-      <div class="form-group">
-        <label>模拟在线状态</label>
-        <select id="editChStatus" style="width:100%">
-          <option value="ON">ON - 在线正常</option>
-          <option value="OFF">OFF - 离线故障</option>
-        </select>
-        <div class="hint">切换为 OFF 将在目录通知中标记离线，并自动停止当前活动点播。</div>
-      </div>
-    </div>
-    <div class="modal-foot">
-      <button class="btn" onclick="closeEditChModal()">取消</button>
-      <button class="btn btn-primary" onclick="submitEditChannel()">保存更新</button>
-    </div>
-  </div>
-</div>
-
-<!-- Confirm Dialog Modal -->
-<div class="modal-overlay" id="confirmModal">
-  <div class="modal-box" style="max-width:420px">
-    <div class="modal-head">
-      <h3 id="confirmModalTitle">操作确认</h3>
-      <button class="modal-close" onclick="closeConfirmModal()">&times;</button>
-    </div>
-    <div class="modal-body" id="confirmModalMessage" style="font-size:13px;color:var(--text-main);line-height:1.6">
-      确认执行此操作？
-    </div>
-    <div class="modal-foot">
-      <button class="btn" onclick="closeConfirmModal()">取消</button>
-      <button class="btn btn-danger" id="confirmModalOkBtn">确认</button>
-    </div>
-  </div>
-</div>
-
-<!-- Toast Container -->
-<div class="toast-container" id="toastContainer"></div>
+<div class="toast-box" id="toastBox"></div>
 
 <script>
-// State
-let globalStatus = {};
+let devices = [];
+let activeDeviceId = '';
+let activeDeviceData = null;
 let videoList = [];
-let logCategory = 'all';
 let rawLogs = [];
 
-// Utils
-function esc(s){return String(s||'').replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
-function fmtSize(b){if(b<1024)return b+' B';if(b<1048576)return(b/1024).toFixed(1)+' KB';return(b/1048576).toFixed(1)+' MB'}
-function fmtDuration(s){
-  if(s<=0)return '00:00';
-  const m=Math.floor(s/60),sec=s%60,h=Math.floor(m/60);
-  const pad=function(n){return String(n).padStart(2,'0')};
-  return h>0 ? (pad(h)+':'+pad(m%60)+':'+pad(sec)) : (pad(m)+':'+pad(sec));
+function esc(s){
+  if(s==null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
-function fmtBitrate(kbps){
-  if(!kbps||kbps<=0) return '0 kbps';
-  if(kbps>=1000) return (kbps/1000).toFixed(2)+' Mbps';
-  return Math.round(kbps)+' kbps';
-}
-function fmtUptime(s){
-  const m=Math.floor(s/60),sec=s%60,h=Math.floor(m/60);
-  return h ? (h+'小时 '+(m%60)+'分') : (m+'分 '+sec+'秒');
+function fmtSize(b){
+  if(!b) return '0 B';
+  if(b<1024) return b + ' B';
+  if(b<1024*1024) return (b/1024).toFixed(1) + ' KB';
+  return (b/(1024*1024)).toFixed(1) + ' MB';
 }
 
-// Toast
 function showToast(msg, type){
-  type = type || 'info';
-  const c = document.getElementById('toastContainer');
-  const t = document.createElement('div');
-  t.className = 'toast '+type;
-  t.innerHTML = '<span>'+esc(msg)+'</span>';
-  c.appendChild(t);
+  const box = document.getElementById('toastBox');
+  const d = document.createElement('div');
+  d.className = 'toast ' + (type || 'info');
+  d.innerHTML = '<span>' + esc(msg) + '</span>';
+  box.appendChild(d);
   setTimeout(function(){
-    t.style.opacity='0';
-    t.style.transition='opacity 0.25s ease';
-    setTimeout(function(){t.remove()}, 250);
+    d.style.opacity = '0';
+    d.style.transition = 'opacity 0.3s ease';
+    setTimeout(function(){ d.remove(); }, 300);
   }, 3200);
 }
 
-// Custom Confirm Modal
-let currentConfirmCb = null;
-function showConfirm(title, msg, onConfirm){
-  document.getElementById('confirmModalTitle').textContent = title;
-  document.getElementById('confirmModalMessage').innerHTML = msg;
-  currentConfirmCb = onConfirm;
-  document.getElementById('confirmModal').classList.add('open');
-}
-function closeConfirmModal(){
-  document.getElementById('confirmModal').classList.remove('open');
-  currentConfirmCb = null;
-}
-document.getElementById('confirmModalOkBtn').onclick = function(){
-  if(currentConfirmCb) currentConfirmCb();
-  closeConfirmModal();
-};
+function openModal(id){ document.getElementById(id).classList.add('open'); }
+function closeModal(id){ document.getElementById(id).classList.remove('open'); }
 
-// Clipboard
-function copyText(text, label){
-  navigator.clipboard.writeText(text).then(function(){
-    showToast('已复制'+(label?' '+label:'')+'到剪贴板', 'success');
-  }).catch(function(){
-    showToast('复制失败，请手动选择复制', 'error');
-  });
-}
-
-// API helper
-async function postAPI(url, body){
-  const opt = {method:'POST'};
-  if(body !== undefined){
-    opt.headers = {'Content-Type':'application/json'};
-    opt.body = JSON.stringify(body);
+async function api(url, method, body){
+  const opts = {method: method || 'GET'};
+  if(body){
+    opts.headers = {'Content-Type': 'application/json'};
+    opts.body = JSON.stringify(body);
   }
   try{
-    const r = await fetch(url, opt);
-    const j = await r.json().catch(function(){return {}});
-    if(!r.ok){
-      showToast(j.error||('请求失败: HTTP '+r.status), 'error');
-      return null;
-    }
+    const r = await fetch(url, opts);
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error || ('请求失败 ('+r.status+')'));
     return j;
   }catch(e){
-    showToast(e.message||'网络错误', 'error');
+    showToast(e.message, 'error');
     return null;
   }
 }
 
-// Render Stats KPI Cards
-function renderStats(st){
-  const sessCount = (st.sessions||[]).length;
-  const chs = st.channels||[];
-  const onlineCount = chs.filter(function(c){return c.status!=='OFF'}).length;
-
-  const items = [
-    {label:'设备编号', val:st.deviceId, copy:true, sub:st.deviceName||'模拟NVR'},
-    {label:'平台 SIP 服务', val:st.server, sub:'传输: '+(st.transport||'udp').toUpperCase()},
-    {label:'本地监听地址', val:st.local, sub:'SIP 端口'},
-    {label:'挂载通道', val:chs.length+' 路', sub:'在线: '+onlineCount+' / 离线: '+(chs.length-onlineCount)},
-    {label:'活动推流会话', val:sessCount+' 路', sub:'实时 PS/RTP'},
-    {label:'已运行时间', val:fmtUptime(st.uptimeSec||0), sub:'连续运行'}
-  ];
-
-  document.getElementById('statsGrid').innerHTML = items.map(function(it){
-    return '<div class="stat-card">' +
-      '<div class="stat-label">' +
-        '<span>' + esc(it.label) + '</span>' +
-        (it.copy ? ('<button class="copy-btn" title="复制" onclick="copyText(\'' + esc(it.val) + '\',\'编号\')">' +
-          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>' +
-        '</button>') : '') +
-      '</div>' +
-      '<div class="stat-val' + (it.val.length > 15 ? ' sm' : '') + '" title="' + esc(it.val) + '">' + esc(it.val) + '</div>' +
-      '<div class="stat-sub">' + esc(it.sub) + '</div>' +
-    '</div>';
-  }).join('');
-
-  // Top header badges
-  const b = document.getElementById('regBadge');
-  b.className = 'badge ' + (st.registered ? 'on' : 'off');
-  b.innerHTML = '<span class="dot"></span><span>' + (st.registered ? 'SIP 已注册' : 'SIP 未注册') + '</span>';
-
-  const lb = document.getElementById('liveBadge');
-  lb.className = 'badge ' + (sessCount > 0 ? 'live' : '');
-  lb.innerHTML = '<span class="dot"></span><span>' + sessCount + ' 路点播中</span>';
-
-  const isPer = (st.mediaMode||'').toLowerCase() === 'per_channel';
-  document.getElementById('modeBadge').textContent = isPer ? '模式: 按通道独立' : '模式: 全通道共用';
-  document.getElementById('btnModeShared').className = isPer ? 'btn' : 'btn btn-primary';
-  document.getElementById('btnModePer').className = isPer ? 'btn btn-primary' : 'btn';
+// Switch Workbench Tab
+function switchWorkbenchTab(tab, btn){
+  document.querySelectorAll('#deviceWorkbench .tab-btn').forEach(function(b){b.classList.remove('active')});
+  btn.classList.add('active');
+  document.getElementById('tabChannels').style.display = (tab==='channels' ? 'block' : 'none');
+  document.getElementById('tabSessions').style.display = (tab==='sessions' ? 'block' : 'none');
+  document.getElementById('tabLogs').style.display = (tab==='logs' ? 'block' : 'none');
+  if(tab==='logs') loadLogs();
 }
 
-// Generate options for video binding selector
-function makeVideoOptions(currentVal){
-  let opts = '<option value="">-- 全局默认视频 --</option>';
-  for(const v of videoList){
-    const sel = (currentVal && (currentVal.endsWith(v.name) || currentVal === v.path)) ? ' selected' : '';
-    opts += '<option value="' + esc(v.path) + '"' + sel + '>' + esc(v.name) + ' (' + fmtSize(v.size) + ')</option>';
-  }
-  const synSel = currentVal === '__synthetic__' ? ' selected' : '';
-  opts += '<option value="__synthetic__"' + synSel + '>[内置测试图案 I_PCM]</option>';
-  return opts;
-}
-
-// Render Channel Cards
-function renderChannels(st, sessMap){
-  const grid = document.getElementById('chGrid');
-  const chs = st.channels || [];
-  document.getElementById('chCount').textContent = chs.length;
-
-  if(!chs.length){
-    grid.innerHTML = '<div class="empty-msg" style="grid-column:1/-1">暂无通道，点击上方「新增通道」进行创建</div>';
-    return;
-  }
-
-  grid.innerHTML = chs.map(function(c){
-    const sess = sessMap[c.id];
-    const isLive = !!sess;
-    const isOffline = c.status === 'OFF';
-    let mediaDesc = c.mp4 || c.h264 || '';
-    if(!mediaDesc) mediaDesc = c.source === 'synthetic' ? '内置合成测试帧' : (c.source || '全局默认');
-
-    const isMp4 = (c.mp4 || '').toLowerCase().endsWith('.mp4') || (mediaDesc || '').toLowerCase().endsWith('.mp4');
-
-    return '<div class="ch-card' + (isLive ? ' live' : '') + '">' +
-      '<div class="ch-header">' +
-        '<div class="ch-title">' +
-          '<div class="ch-name">' +
-            '<span>' + esc(c.name || '未命名通道') + '</span>' +
-            '<span class="badge ' + (isLive ? 'live' : (isOffline ? 'off' : 'on')) + '" style="padding:2px 7px;font-size:10.5px">' +
-              '<span class="dot"></span><span>' + (isLive ? '推流中' : (isOffline ? '离线' : '在线')) + '</span>' +
-            '</span>' +
-          '</div>' +
-          '<div class="ch-id">' +
-            '<span>' + esc(c.id) + '</span>' +
-            '<button class="copy-btn" title="复制国标编号" onclick="copyText(\'' + esc(c.id) + '\',\'通道编号\')">' +
-              '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>' +
-            '</button>' +
-          '</div>' +
-        '</div>' +
-      '</div>' +
-
-      '<div class="ch-meta">' +
-        '<span>当前媒体</span>' +
-        '<b title="' + esc(mediaDesc) + '">' + esc(mediaDesc) + '</b>' +
-        '<span>视频模式</span>' +
-        '<b>' + esc(c.source || 'mp4') + '</b>' +
-      '</div>' +
-
-      (isLive ? ('<div class="ch-live-bar">' +
-        '<div style="font-size:11.5px;color:#6ee7b7">' +
-          '<div><b>' + (sess.streamType === 'playback' ? '录像回放' : (sess.streamType === 'download' ? '录像下载' : '实时点播')) + ' | SSRC:</b> ' + esc(sess.ssrc) + '</div>' +
-          '<div><b>对端:</b> ' + esc(sess.remoteIp) + ':' + sess.remotePort + ' (' + (sess.tcp?'TCP':'UDP') + ')</div>' +
-        '</div>' +
-        '<button class="btn btn-danger btn-sm" onclick="stopSession(\'' + esc(sess.callId) + '\')">断开推流</button>' +
-      '</div>') : '') +
-
-      '<div style="display:flex;gap:6px;align-items:center">' +
-        '<select class="channel-bind-select" data-ch="' + esc(c.id) + '" style="flex:1;min-width:0">' +
-          makeVideoOptions(c.mp4 || c.h264) +
-        '</select>' +
-        '<button class="btn btn-sm btn-primary" onclick="bindChannelVideo(this)">保存绑定</button>' +
-        (isMp4 ? ('<button class="btn btn-sm" title="预览视频" onclick="previewVideoPath(\'' + esc(c.mp4 || mediaDesc) + '\')">' +
-          '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>' +
-        '</button>') : '') +
-      '</div>' +
-
-      '<div class="ch-actions">' +
-        '<button class="btn btn-sm" onclick="toggleChannelOnline(\'' + esc(c.id) + '\',\'' + (isOffline ? 'ON' : 'OFF') + '\')">' +
-          (isOffline ? '设为在线' : '模拟掉线') +
-        '</button>' +
-        '<div style="display:flex;gap:6px">' +
-          '<button class="btn btn-sm" onclick="openEditChModal(\'' + esc(c.id) + '\',\'' + esc(c.name) + '\',\'' + esc(c.status) + '\')">编辑</button>' +
-          '<button class="btn btn-sm btn-danger" onclick="removeChannel(\'' + esc(c.id) + '\')">删除</button>' +
-        '</div>' +
-      '</div>' +
-    '</div>';
-  }).join('');
-}
-
-// Render Sessions Table
-function renderSessions(st){
-  const tbody = document.getElementById('sessTbody');
-  const rows = st.sessions || [];
-  document.getElementById('sessStatsSummary').textContent = rows.length + ' 个活动推流会话';
-
-  if(!rows.length){
-    tbody.innerHTML = '<tr><td colspan="10"><div class="empty-msg">当前没有活跃的点播推流会话。在平台（如 WVP）发起实时点播或录像回放即可连通。</div></td></tr>';
-    return;
-  }
-
-  tbody.innerHTML = rows.map(function(s){
-    const isPlayback = s.streamType === 'playback';
-    const isDownload = s.streamType === 'download';
-    let typeBadge = '<span class="badge live" style="padding:2px 8px"><span class="dot"></span>实时直播</span>';
-    if(isPlayback){
-      typeBadge = '<span class="badge playback" style="padding:2px 8px"><span class="dot"></span>录像回放</span>';
-    } else if(isDownload){
-      typeBadge = '<span class="badge download" style="padding:2px 8px"><span class="dot"></span>录像下载</span>';
-    }
-
-    let statusHtml = '';
-    if(s.paused){
-      statusHtml = '<span class="badge paused"><span class="dot"></span>已暂停</span>';
-    } else if(s.sourceReady){
-      let scaleText = '';
-      if(isPlayback && s.scale && s.scale !== 1){
-        scaleText = ' (' + s.scale + 'x)';
-      }
-      statusHtml = '<span class="badge on"><span class="dot"></span><span>' + (isPlayback ? ('回放中' + scaleText) : (isDownload ? '下载中' : '实时推流中')) + '</span></span>';
-    } else {
-      statusHtml = '<span class="badge"><span class="dot"></span><span>准备抽流</span></span>';
-    }
-
-    return '<tr>' +
-      '<td style="font-family:var(--font-mono);font-weight:600">' + esc(s.channelId) + '</td>' +
-      '<td>' + typeBadge + '</td>' +
-      '<td style="font-family:var(--font-mono);color:var(--text-muted)">' + esc(s.ssrc) + '</td>' +
-      '<td>' + esc(s.remoteIp) + ':' + s.remotePort + '</td>' +
-      '<td><span class="badge" style="padding:2px 6px">' + (s.tcp ? 'TCP' : 'UDP') + '</span></td>' +
-      '<td style="font-family:var(--font-mono)">' + fmtDuration(s.durationSec||0) + '</td>' +
-      '<td style="font-family:var(--font-mono)">' + (s.packetsSent||0).toLocaleString() + ' 包 (' + fmtSize(s.bytesSent||0) + ')</td>' +
-      '<td style="font-family:var(--font-mono);color:#38bdf8">' + fmtBitrate(s.bitrateKbps||0) + '</td>' +
-      '<td>' + statusHtml + '</td>' +
-      '<td style="text-align:center">' +
-        '<button class="btn btn-danger btn-sm" onclick="stopSession(\'' + esc(s.callId) + '\')">断开</button>' +
-      '</td>' +
-    '</tr>';
-  }).join('');
-}
-
-// Render Video Library
-function renderVideos(){
-  const container = document.getElementById('videoListContainer');
-  const modalSel = document.getElementById('addChVideo');
-
-  modalSel.innerHTML = '<option value="">暂不绑定（使用全局默认）</option>' +
-    videoList.map(function(v){
-      return '<option value="' + esc(v.name) + '">' + esc(v.name) + ' (' + fmtSize(v.size) + ')</option>';
-    }).join('');
-
-  if(!videoList.length){
-    container.innerHTML = '<div class="empty-msg">视频库为空，请选择文件上传</div>';
-    return;
-  }
-
-  container.innerHTML = videoList.map(function(v){
-    const isMp4 = v.name.toLowerCase().endsWith('.mp4');
-    return '<div class="video-card-item">' +
-      '<div class="video-file-info">' +
-        '<span class="video-format-pill ' + (isMp4 ? 'mp4' : 'h264') + '">' + (isMp4 ? 'MP4' : 'H264') + '</span>' +
-        '<div style="min-width:0;flex:1">' +
-          '<div style="font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + esc(v.name) + '">' + esc(v.name) + '</div>' +
-          '<div style="font-size:11px;color:var(--text-dim)">' + fmtSize(v.size) + '</div>' +
-        '</div>' +
-      '</div>' +
-      '<div style="display:flex;gap:6px;align-items:center">' +
-        (isMp4 ? ('<button class="btn btn-sm btn-primary" onclick="previewVideoPath(\'' + esc(v.path) + '\',\'' + esc(v.name) + '\')">' +
-          '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg> 预览' +
-        '</button>') : '') +
-        '<button class="btn btn-sm btn-danger" onclick="deleteVideoFile(\'' + esc(v.name) + '\')">' +
-          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
-        '</button>' +
-      '</div>' +
-    '</div>';
-  }).join('');
-}
-
-// Load Video List
-async function loadVideos(){
-  try{
-    const r = await fetch('/api/videos');
-    const j = await r.json();
-    videoList = j.videos || [];
-  }catch(e){videoList = []}
-  renderVideos();
+// Switch Config Modal Tab
+function switchCfgTab(tab, btn){
+  document.querySelectorAll('#deviceConfigModal .tab-btn').forEach(function(b){b.classList.remove('active')});
+  btn.classList.add('active');
+  document.getElementById('cfgTabSip').style.display = (tab==='sip' ? 'block' : 'none');
+  document.getElementById('cfgTabDevice').style.display = (tab==='device' ? 'block' : 'none');
+  document.getElementById('cfgTabMedia').style.display = (tab==='media' ? 'block' : 'none');
 }
 
 // Refresh Everything
 async function refreshAll(manual){
   try{
-    const st = await fetch('/api/status').then(function(r){return r.json()});
-    globalStatus = st;
-    const sessMap = {};
-    for(const s of (st.sessions||[])) sessMap[s.channelId] = s;
+    const j = await api('/api/devices');
+    if(!j) return;
+    devices = j.devices || [];
 
-    renderStats(st);
-    renderChannels(st, sessMap);
-    renderSessions(st);
-    await loadLogs();
+    // Overview Stats
+    let onlineCount = 0;
+    let chCount = 0;
+    let sessCount = 0;
+    devices.forEach(function(d){
+      if(d.running && d.registered) onlineCount++;
+      chCount += (d.channelCount || 0);
+      sessCount += (d.activeSessions || 0);
+    });
 
-    if(manual) showToast('状态已刷新', 'success');
+    document.getElementById('statTotalDevices').textContent = devices.length;
+    document.getElementById('statOnlineDevices').textContent = onlineCount + ' / ' + devices.length;
+    document.getElementById('statTotalChannels').textContent = chCount;
+    document.getElementById('statTotalSessions').textContent = sessCount;
+
+    // Active Device fallback
+    if(!activeDeviceId && devices.length > 0){
+      activeDeviceId = devices[0].id;
+    } else if(devices.length > 0 && !devices.some(function(d){return d.id === activeDeviceId})){
+      activeDeviceId = devices[0].id;
+    }
+
+    renderDeviceGrid();
+    await loadActiveDeviceDetail();
+    await loadVideos();
+
+    if(manual) showToast('设备状态已刷新', 'success');
   }catch(e){
-    if(manual) showToast('刷新状态失败: '+e.message, 'error');
+    if(manual) showToast('刷新异常: '+e.message, 'error');
   }
 }
 
-// Log Processing & Coloring
-function parseLogLine(line){
-  let tag = 'other';
-  let tagClass = '';
-  const lower = line.toLowerCase();
+// Render Device Cards Grid
+function renderDeviceGrid(){
+  const container = document.getElementById('deviceGridContainer');
+  if(!devices.length){
+    container.innerHTML = '<div style="color:var(--text-dim);grid-column:1/-1;padding:24px;text-align:center;background:var(--surface);border-radius:var(--radius);border:1px dashed var(--border)">暂无模拟设备，点击上方「新建模拟设备」创建</div>';
+    return;
+  }
 
-  if(lower.includes('[sip]')) { tag = 'SIP'; tagClass = 'sip'; }
-  else if(lower.includes('[media]')) { tag = 'MEDIA'; tagClass = 'media'; }
-  else if(lower.includes('[gb]')) { tag = 'GB'; tagClass = 'gb'; }
-  else if(lower.includes('[device]')) { tag = 'DEVICE'; tagClass = 'device'; }
-  else if(lower.includes('[ui]')) { tag = 'UI'; tagClass = 'ui'; }
+  container.innerHTML = devices.map(function(d){
+    const isActive = (d.id === activeDeviceId);
+    let badgeClass = 'stopped';
+    let badgeText = '已停止';
+    if(d.running){
+      if(d.registered){ badgeClass = 'on'; badgeText = '已连接平台'; }
+      else { badgeClass = 'warn'; badgeText = '运行中(未注册)'; }
+    }
+    if(d.error){ badgeClass = 'off'; badgeText = '异常'; }
 
-  const isErr = lower.includes('error') || lower.includes('failed') || lower.includes('fail:');
-  if(isErr) tagClass += ' err';
-
-  return {raw:line, tag:tag, tagClass:tagClass, isErr:isErr};
+    return '<div class="device-card ' + (isActive ? 'active' : '') + '" onclick="selectDevice(\'' + esc(d.id) + '\')">' +
+      '<div class="device-card-head">' +
+        '<div class="device-icon">' +
+          '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>' +
+        '</div>' +
+        '<div class="device-card-title">' +
+          '<div class="device-card-name">' + esc(d.name) + '</div>' +
+          '<div class="device-card-id">' + esc(d.id) + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="device-meta-grid">' +
+        '<div class="meta-item"><span class="meta-k">状态</span><span><span class="badge ' + badgeClass + '"><span class="dot"></span>' + badgeText + '</span></span></div>' +
+        '<div class="meta-item"><span class="meta-k">本地 SIP 端口</span><span class="meta-v">' + esc(d.localPort) + ' (' + esc(d.transport) + ')</span></div>' +
+        '<div class="meta-item"><span class="meta-k">对接平台</span><span class="meta-v">' + esc(d.server) + '</span></div>' +
+        '<div class="meta-item"><span class="meta-k">通道 / 会话</span><span class="meta-v">' + (d.channelCount||0) + ' 通道 · ' + (d.activeSessions||0) + ' 点播</span></div>' +
+      '</div>' +
+      '<div class="device-card-actions" onclick="event.stopPropagation()">' +
+        (d.running ?
+          ('<button class="btn btn-sm btn-danger" onclick="stopDevice(\'' + esc(d.id) + '\')">停止</button>' +
+           '<button class="btn btn-sm" onclick="restartDevice(\'' + esc(d.id) + '\')">重启</button>') :
+          ('<button class="btn btn-sm btn-success" onclick="startDevice(\'' + esc(d.id) + '\')">启动</button>')
+        ) +
+        '<button class="btn btn-sm btn-primary" onclick="openDeviceConfigModal(\'' + esc(d.id) + '\')">⚙️ 全量配置</button>' +
+        '<button class="btn btn-sm" onclick="deleteDevice(\'' + esc(d.id) + '\')">🗑️ 删除</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
 }
 
-async function loadLogs(){
-  const q = document.getElementById('logKeyword').value.trim();
-  const url = '/api/logs?n=300' + (q ? ('&q=' + encodeURIComponent(q)) : '');
-  try{
-    const j = await fetch(url).then(function(r){return r.json()});
-    rawLogs = j.lines || [];
-    renderLogs();
-  }catch(e){}
+function selectDevice(id){
+  activeDeviceId = id;
+  renderDeviceGrid();
+  loadActiveDeviceDetail();
 }
 
-function setLogCategory(cat){
-  logCategory = cat;
-  document.querySelectorAll('.log-tag-btn').forEach(function(b){
-    b.classList.toggle('active', b.textContent.toLowerCase().includes(cat) || (cat==='all' && b.textContent==='全部'));
-  });
-  renderLogs();
+// Load Selected Device Detail
+async function loadActiveDeviceDetail(){
+  if(!activeDeviceId){
+    document.getElementById('workbenchTitle').textContent = '未选择设备';
+    document.getElementById('channelListContainer').innerHTML = '';
+    return;
+  }
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId));
+  if(!j) return;
+  activeDeviceData = j;
+
+  const prof = j.profile || {};
+  const devCfg = prof.device || {};
+  const sipCfg = prof.sip || {};
+  const st = j.status || {};
+
+  document.getElementById('workbenchTitle').textContent = devCfg.name + ' (' + activeDeviceId + ')';
+  
+  let stBadge = j.running ?
+    (st.registered ? '<span class="badge on"><span class="dot"></span>已连接平台</span>' : '<span class="badge warn"><span class="dot"></span>运行中(鉴权中)</span>') :
+    '<span class="badge stopped"><span class="dot"></span>已停止</span>';
+
+  document.getElementById('workbenchBadges').innerHTML = stBadge +
+    '<span class="badge"><span class="dot"></span>本地端口: ' + esc(sipCfg.local_port) + '</span>' +
+    '<span class="badge"><span class="dot"></span>平台: ' + esc(sipCfg.server_ip) + ':' + esc(sipCfg.server_port) + '</span>';
+
+  // Mode buttons
+  const isPerChannel = (prof.media && prof.media.mode === 'per_channel');
+  document.getElementById('btnModeShared').className = 'btn btn-sm ' + (!isPerChannel ? 'btn-primary' : '');
+  document.getElementById('btnModePerChannel').className = 'btn btn-sm ' + (isPerChannel ? 'btn-primary' : '');
+
+  renderChannels(devCfg.channels || [], prof.media || {}, st.sessions || []);
+  renderSessions(st.sessions || []);
 }
 
-function renderLogs(){
-  const box = document.getElementById('logBox');
-  let lines = rawLogs;
+// Render Channels for active device
+function renderChannels(channels, mediaCfg, sessions){
+  const container = document.getElementById('channelListContainer');
+  if(!channels.length){
+    container.innerHTML = '<div style="color:var(--text-dim);grid-column:1/-1;padding:20px;text-align:center">该设备暂无下挂通道，请点击上方「新增通道」</div>';
+    return;
+  }
 
-  if(logCategory !== 'all'){
-    lines = lines.filter(function(l){
-      const lower = l.toLowerCase();
-      if(logCategory === 'sip') return lower.includes('[sip]');
-      if(logCategory === 'media') return lower.includes('[media]');
-      if(logCategory === 'gb') return lower.includes('[gb]');
-      if(logCategory === 'err') return lower.includes('error') || lower.includes('failed');
-      return true;
+  const liveChannelMap = {};
+  (sessions||[]).forEach(function(s){ liveChannelMap[s.channelId] = s; });
+
+  const mediaChannels = (mediaCfg && mediaCfg.channels) || {};
+
+  container.innerHTML = channels.map(function(ch){
+    const sess = liveChannelMap[ch.id];
+    const isLive = !!sess;
+    const chMedia = mediaChannels[ch.id] || {};
+    const boundMp4 = chMedia.mp4_file || '';
+    const boundH264 = chMedia.h264_file || '';
+    const boundSrc = chMedia.source || (mediaCfg.source || 'mp4');
+
+    let boundLabel = '全局默认';
+    if(boundSrc === 'synthetic') boundLabel = '内置彩条流';
+    else if(boundMp4) boundLabel = boundMp4.split('/').pop();
+    else if(boundH264) boundLabel = boundH264.split('/').pop();
+
+    return '<div class="ch-card ' + (isLive ? 'live' : '') + '">' +
+      '<div class="ch-header">' +
+        '<div>' +
+          '<div class="ch-name">' + esc(ch.name) + '</div>' +
+          '<div class="ch-id">' + esc(ch.id) + '</div>' +
+        '</div>' +
+        '<div>' +
+          (isLive ? '<span class="badge live"><span class="dot"></span>推流中</span>' :
+            (ch.status === 'ON' ? '<span class="badge on"><span class="dot"></span>在线</span>' : '<span class="badge off"><span class="dot"></span>离线</span>')
+          ) +
+        '</div>' +
+      '</div>' +
+      '<div style="font-size:11px;color:var(--text-dim);display:flex;flex-direction:column;gap:4px">' +
+        '<div>当前视频源: <b style="color:var(--text-main)">' + esc(boundLabel) + '</b></div>' +
+        (isLive ? ('<div>点播目标: <code>' + esc(sess.remoteIp) + ':' + esc(sess.remotePort) + '</code></div>') : '') +
+      '</div>' +
+      '<div style="display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap">' +
+        '<select class="channel-bind-select" style="flex:1;min-width:140px">' +
+          '<option value="">使用全局默认视频</option>' +
+          '<option value="__synthetic__" ' + (boundSrc==='synthetic'?'selected':'') + '>内置彩条测试流</option>' +
+          videoList.map(function(v){
+            const sel = (boundMp4===v.path || boundH264===v.path || boundMp4===v.name) ? 'selected' : '';
+            return '<option value="' + esc(v.path) + '" ' + sel + '>' + esc(v.name) + '</option>';
+          }).join('') +
+        '</select>' +
+        '<button class="btn btn-sm btn-primary" onclick="bindChannelMedia(\'' + esc(ch.id) + '\', this)">绑定</button>' +
+        '<button class="btn btn-sm" onclick="toggleChannelStatus(\'' + esc(ch.id) + '\',\'' + (ch.status==='ON'?'OFF':'ON') + '\')">' + (ch.status==='ON'?'设为离线':'设为在线') + '</button>' +
+        '<button class="btn btn-sm btn-danger" onclick="removeChannel(\'' + esc(ch.id) + '\')">删除</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+// Render Sessions for active device
+function renderSessions(sessions){
+  const container = document.getElementById('sessionListContainer');
+  if(!sessions || !sessions.length){
+    container.innerHTML = '<div style="color:var(--text-dim);padding:24px;text-align:center">当前无实时推流会话。在平台（如 WVP）上点击通道播放后，将在此展示推流状态。</div>';
+    return;
+  }
+  container.innerHTML = sessions.map(function(s){
+    return '<div class="session-item">' +
+      '<div>' +
+        '<div style="font-weight:700;color:#fff;font-size:13px">' + esc(s.channelId) + ' · <span class="badge live"><span class="dot"></span>' + esc(s.streamType||'live') + '</span></div>' +
+        '<div style="font-size:11px;font-family:var(--font-mono);color:var(--text-dim);margin-top:4px">' +
+          'SSRC: ' + esc(s.ssrc) + ' · 目标: ' + esc(s.remoteIp) + ':' + esc(s.remotePort) + ' (' + (s.isTcp?'TCP':'UDP') + ') · FPS: ' + (s.fps||25) +
+        '</div>' +
+      '</div>' +
+      '<button class="btn btn-sm btn-danger" onclick="stopSession(\'' + esc(s.callId) + '\')">停止推流</button>' +
+    '</div>';
+  }).join('');
+}
+
+// Load Videos in assets
+async function loadVideos(){
+  const j = await api('/api/videos');
+  if(j) videoList = j.videos || [];
+  renderVideoList();
+}
+
+function renderVideoList(){
+  const container = document.getElementById('videoListContainer');
+  const addChSel = document.getElementById('addChVideo');
+  if(addChSel){
+    addChSel.innerHTML = '<option value="">暂不指定 (继承默认)</option>' +
+      '<option value="__synthetic__">内置合成彩条流</option>' +
+      videoList.map(function(v){
+        return '<option value="' + esc(v.path) + '">' + esc(v.name) + ' (' + fmtSize(v.size) + ')</option>';
+      }).join('');
+  }
+
+  if(!videoList.length){
+    container.innerHTML = '<div style="color:var(--text-dim);padding:14px;text-align:center">素材库为空，请选择 MP4 / H264 文件上传</div>';
+    return;
+  }
+  container.innerHTML = videoList.map(function(v){
+    const isMp4 = v.name.toLowerCase().endsWith('.mp4');
+    return '<div class="video-card-item">' +
+      '<div style="min-width:0;flex:1">' +
+        '<div style="font-weight:600;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(v.name) + '</div>' +
+        '<div style="font-size:11px;color:var(--text-dim)">' + fmtSize(v.size) + '</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:6px">' +
+        (isMp4 ? ('<button class="btn btn-sm btn-primary" onclick="previewVideo(\'' + esc(v.path) + '\',\'' + esc(v.name) + '\')">在线预览</button>') : '') +
+        '<button class="btn btn-sm btn-danger" onclick="deleteVideoFile(\'' + esc(v.name) + '\')">删除</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+// Open Device Full Config Modal (自定义所有参数)
+async function openDeviceConfigModal(id){
+  const j = await api('/api/devices/' + encodeURIComponent(id));
+  if(!j || !j.profile) return;
+  const p = j.profile;
+  const sip = p.sip || {};
+  const dev = p.device || {};
+  const media = p.media || {};
+
+  document.getElementById('cfgActiveDevId').value = id;
+  document.getElementById('devCfgModalTitle').textContent = '自定义设备参数 · ' + (dev.name || id);
+
+  // SIP
+  document.getElementById('cfgSipServerIp').value = sip.server_ip || '127.0.0.1';
+  document.getElementById('cfgSipServerPort').value = sip.server_port || 5060;
+  document.getElementById('cfgSipLocalIp').value = sip.local_ip || '127.0.0.1';
+  document.getElementById('cfgSipLocalPort').value = sip.local_port || 5070;
+  document.getElementById('cfgSipTransport').value = sip.transport || 'udp';
+  document.getElementById('cfgSipUsername').value = sip.username || id;
+  document.getElementById('cfgSipPassword').value = sip.password || '12345678';
+  document.getElementById('cfgSipExpires').value = sip.expires || 3600;
+  document.getElementById('cfgSipKeepalive').value = sip.keepalive_interval || 60;
+  document.getElementById('cfgSipTimeoutCount').value = sip.keepalive_timeout_count || 3;
+
+  // Device
+  document.getElementById('cfgDevId').value = dev.id || id;
+  document.getElementById('cfgDevName').value = dev.name || '';
+  document.getElementById('cfgDevDomain').value = dev.domain || '';
+  document.getElementById('cfgDevManufacturer').value = dev.manufacturer || '';
+  document.getElementById('cfgDevModel').value = dev.model || '';
+  document.getElementById('cfgDevFirmware').value = dev.firmware || '';
+
+  // Media
+  document.getElementById('cfgMediaMode').value = media.mode || 'per_channel';
+  document.getElementById('cfgMediaSource').value = media.source || 'mp4';
+  document.getElementById('cfgMediaMp4').value = media.mp4_file || '';
+  document.getElementById('cfgMediaH264').value = media.h264_file || '';
+  document.getElementById('cfgMediaWidth').value = media.width || 1280;
+  document.getElementById('cfgMediaHeight').value = media.height || 720;
+  document.getElementById('cfgMediaFps').value = media.fps || 25;
+  document.getElementById('cfgMediaPayloadMax').value = media.rtp_payload_max || 1400;
+  document.getElementById('cfgMediaLocalIp').value = media.local_ip || '';
+
+  openModal('deviceConfigModal');
+}
+
+// Save Device Full Config
+async function saveDeviceConfig(restart){
+  const id = document.getElementById('cfgActiveDevId').value;
+  if(!activeDeviceData || !activeDeviceData.profile) return;
+  const p = JSON.parse(JSON.stringify(activeDeviceData.profile));
+
+  // Update SIP
+  p.sip.server_ip = document.getElementById('cfgSipServerIp').value.trim();
+  p.sip.server_port = parseInt(document.getElementById('cfgSipServerPort').value) || 5060;
+  p.sip.local_ip = document.getElementById('cfgSipLocalIp').value.trim();
+  p.sip.local_port = parseInt(document.getElementById('cfgSipLocalPort').value) || 5070;
+  p.sip.transport = document.getElementById('cfgSipTransport').value;
+  p.sip.username = document.getElementById('cfgSipUsername').value.trim();
+  p.sip.password = document.getElementById('cfgSipPassword').value.trim();
+  p.sip.expires = parseInt(document.getElementById('cfgSipExpires').value) || 3600;
+  p.sip.keepalive_interval = parseInt(document.getElementById('cfgSipKeepalive').value) || 60;
+  p.sip.keepalive_timeout_count = parseInt(document.getElementById('cfgSipTimeoutCount').value) || 3;
+
+  // Update Device
+  p.device.name = document.getElementById('cfgDevName').value.trim();
+  p.device.domain = document.getElementById('cfgDevDomain').value.trim();
+  p.device.manufacturer = document.getElementById('cfgDevManufacturer').value.trim();
+  p.device.model = document.getElementById('cfgDevModel').value.trim();
+  p.device.firmware = document.getElementById('cfgDevFirmware').value.trim();
+
+  // Update Media
+  p.media.mode = document.getElementById('cfgMediaMode').value;
+  p.media.source = document.getElementById('cfgMediaSource').value;
+  p.media.mp4_file = document.getElementById('cfgMediaMp4').value.trim();
+  p.media.h264_file = document.getElementById('cfgMediaH264').value.trim();
+  p.media.width = parseInt(document.getElementById('cfgMediaWidth').value) || 1280;
+  p.media.height = parseInt(document.getElementById('cfgMediaHeight').value) || 720;
+  p.media.fps = parseInt(document.getElementById('cfgMediaFps').value) || 25;
+  p.media.rtp_payload_max = parseInt(document.getElementById('cfgMediaPayloadMax').value) || 1400;
+  p.media.local_ip = document.getElementById('cfgMediaLocalIp').value.trim();
+
+  const url = '/api/devices/' + encodeURIComponent(id) + (restart ? '?restart=true' : '');
+  const j = await api(url, 'PUT', p);
+  if(j && j.ok){
+    showToast('设备配置已保存至 JSON 文件' + (restart ? '，并已重启生效' : ''), 'success');
+    closeModal('deviceConfigModal');
+    refreshAll();
+  }
+}
+
+// Open New Device Modal
+async function openNewDeviceModal(){
+  const res = await api('/api/devices/next-port');
+  const port = (res && res.port) ? res.port : 5071;
+  document.getElementById('newDevLocalPort').value = port;
+
+  // Default server settings from first device if available
+  if(devices.length > 0 && activeDeviceData && activeDeviceData.profile){
+    const s = activeDeviceData.profile.sip;
+    document.getElementById('newDevServerIp').value = s.server_ip || '127.0.0.1';
+    document.getElementById('newDevServerPort').value = s.server_port || 5060;
+    document.getElementById('newDevLocalIp').value = s.local_ip || '127.0.0.1';
+    document.getElementById('newDevTransport').value = s.transport || 'udp';
+  } else {
+    document.getElementById('newDevServerIp').value = '127.0.0.1';
+    document.getElementById('newDevServerPort').value = 5060;
+    document.getElementById('newDevLocalIp').value = '127.0.0.1';
+  }
+
+  // Suggest ID based on existing max
+  let nextNum = devices.length + 1;
+  let idPrefix = '340200000011800000';
+  document.getElementById('newDevId').value = idPrefix + (nextNum < 10 ? ('0' + nextNum) : nextNum);
+  document.getElementById('newDevName').value = '模拟NVR-' + (nextNum < 10 ? ('0' + nextNum) : nextNum);
+
+  openModal('newDeviceModal');
+}
+
+// Submit Create Device
+async function submitCreateDevice(){
+  const id = document.getElementById('newDevId').value.trim();
+  const name = document.getElementById('newDevName').value.trim();
+  const sIp = document.getElementById('newDevServerIp').value.trim();
+  const sPort = parseInt(document.getElementById('newDevServerPort').value) || 5060;
+  const lIp = document.getElementById('newDevLocalIp').value.trim() || '127.0.0.1';
+  const lPort = parseInt(document.getElementById('newDevLocalPort').value) || 5070;
+  const transport = document.getElementById('newDevTransport').value;
+  const pwd = document.getElementById('newDevPassword').value.trim() || '12345678';
+  const chCount = parseInt(document.getElementById('newDevInitChannels').value) || 0;
+
+  if(!id || id.length !== 20){
+    showToast('设备国标编码必须为20位数字', 'error');
+    return;
+  }
+
+  const channels = [];
+  for(let i=1; i<=chCount; i++){
+    const chId = id.substring(0, 10) + '132' + id.substring(13, 18) + (i<10?('0'+i):i);
+    channels.push({
+      id: chId,
+      name: '通道' + i,
+      status: 'ON',
+      parent_id: id,
+      register_way: 1
     });
   }
 
-  if(!lines.length){
-    box.innerHTML = '<div style="color:#64748b;padding:8px 0">（暂无符合条件的日志）</div>';
-    return;
+  const profile = {
+    enabled: true,
+    sip: {
+      server_ip: sIp,
+      server_port: sPort,
+      local_ip: lIp,
+      local_port: lPort,
+      transport: transport,
+      username: id,
+      password: pwd,
+      expires: 3600,
+      keepalive_interval: 60,
+      keepalive_timeout_count: 3
+    },
+    device: {
+      id: id,
+      name: name || ('模拟设备' + id.substring(16)),
+      domain: id.substring(0, 10),
+      manufacturer: 'GB28181-Sim',
+      model: 'SIM-NVR-100',
+      firmware: 'V1.0.0',
+      channels: channels
+    },
+    media: {
+      mode: 'per_channel',
+      source: 'mp4',
+      mp4_file: 'assets/1.mp4',
+      fps: 25,
+      width: 1280,
+      height: 720
+    }
+  };
+
+  const j = await api('/api/devices', 'POST', profile);
+  if(j && j.ok){
+    showToast('模拟设备已成功创建并保存', 'success');
+    closeModal('newDeviceModal');
+    activeDeviceId = id;
+    refreshAll();
   }
+}
 
-  box.innerHTML = lines.map(function(line){
-    const p = parseLogLine(line);
-    const tagHtml = p.tag !== 'other' ? ('<span class="log-tag ' + p.tagClass + '">' + p.tag + '</span>') : '';
-    return '<div class="log-line">' + tagHtml + '<span>' + esc(p.raw) + '</span></div>';
-  }).join('');
-
-  if(document.getElementById('autoScroll').checked){
-    box.scrollTop = box.scrollHeight;
+// Lifecycle Actions
+async function startDevice(id){
+  const j = await api('/api/devices/' + encodeURIComponent(id) + '/start', 'POST');
+  if(j && j.ok){ showToast('设备已启动', 'success'); refreshAll(); }
+}
+async function stopDevice(id){
+  const j = await api('/api/devices/' + encodeURIComponent(id) + '/stop', 'POST');
+  if(j && j.ok){ showToast('设备已停止', 'info'); refreshAll(); }
+}
+async function restartDevice(id){
+  const j = await api('/api/devices/' + encodeURIComponent(id) + '/restart', 'POST');
+  if(j && j.ok){ showToast('设备已重启', 'success'); refreshAll(); }
+}
+async function startAllDevices(){
+  const j = await api('/api/devices/start-all', 'POST');
+  if(j){ showToast('已发起全部启动', 'success'); refreshAll(); }
+}
+async function stopAllDevices(){
+  const j = await api('/api/devices/stop-all', 'POST');
+  if(j){ showToast('已停止所有设备', 'info'); refreshAll(); }
+}
+async function deleteDevice(id){
+  if(!confirm('确定彻底删除该模拟设备及对应的配置文件 ' + id + '.json 吗？')) return;
+  const j = await api('/api/devices/' + encodeURIComponent(id), 'DELETE');
+  if(j && j.ok){
+    showToast('设备已删除', 'info');
+    if(activeDeviceId === id) activeDeviceId = '';
+    refreshAll();
   }
 }
 
-function clearLogSearch(){
-  document.getElementById('logKeyword').value = '';
-  loadLogs();
+// Channel operations for active device
+function openAddChannelModal(){
+  if(!activeDeviceId){ showToast('请先选择设备', 'error'); return; }
+  let nextIdx = (activeDeviceData && activeDeviceData.profile && activeDeviceData.profile.device && activeDeviceData.profile.device.channels ? activeDeviceData.profile.device.channels.length : 0) + 1;
+  let chPrefix = activeDeviceId.substring(0, 10) + '132' + activeDeviceId.substring(13, 18);
+  document.getElementById('addChId').value = chPrefix + (nextIdx < 10 ? ('0' + nextIdx) : nextIdx);
+  document.getElementById('addChName').value = '通道' + nextIdx;
+  openModal('addChannelModal');
 }
 
-function exportLogFile(){
-  const content = rawLogs.join('\n');
-  const blob = new Blob([content], {type:'text/plain;charset=utf-8'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'gb28181_device_' + (new Date().toISOString().replace(/[:.]/g,'-')) + '.log';
-  a.click();
-  URL.revokeObjectURL(url);
-  showToast('日志已导出下载', 'success');
-}
-
-// SIP Actions
-async function reqRegister(){
-  const j = await postAPI('/api/register');
-  if(j){ showToast('已发送注册请求', 'success'); refreshAll(); }
-}
-async function reqUnregister(){
-  const j = await postAPI('/api/unregister');
-  if(j){ showToast('已发送注销请求', 'info'); refreshAll(); }
-}
-async function reqKeepalive(){
-  const j = await postAPI('/api/keepalive');
-  if(j){ showToast('心跳通知已发送', 'success'); }
-}
-async function stopSession(callId){
-  showConfirm('挂断推流', '确认断开此路实时流推流会话？', async function(){
-    const j = await postAPI('/api/session/stop?callId=' + encodeURIComponent(callId));
-    if(j){ showToast('已停止推流', 'info'); refreshAll(); }
-  });
-}
-
-// Channel Actions
-function openAddChModal(){
-  document.getElementById('addChId').value = '';
-  document.getElementById('addChName').value = '';
-  document.getElementById('addChModal').classList.add('open');
-  document.getElementById('addChId').focus();
-}
-function closeAddChModal(){
-  document.getElementById('addChModal').classList.remove('open');
-}
 async function submitAddChannel(){
   const id = document.getElementById('addChId').value.trim();
   const name = document.getElementById('addChName').value.trim();
-  const mp4 = document.getElementById('addChVideo').value;
-  if(id.length !== 20){
-    showToast('通道国标编号必须为 20 位数字', 'error');
-    return;
-  }
-  const j = await postAPI('/api/channels/add', {id:id, name:name, mp4:mp4});
-  if(j){
-    showToast('通道添加成功', 'success');
-    closeAddChModal();
+  const video = document.getElementById('addChVideo').value;
+  if(!id || id.length !== 20){ showToast('通道编码必须为20位', 'error'); return; }
+
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/channels/add', 'POST', {
+    id: id,
+    name: name,
+    mp4: (video==='__synthetic__'?'':video)
+  });
+  if(j && j.ok){
+    showToast('通道已添加并保存', 'success');
+    closeModal('addChannelModal');
     refreshAll();
   }
 }
 
-function openEditChModal(id, name, status){
-  document.getElementById('editChId').value = id;
-  document.getElementById('editChName').value = name;
-  document.getElementById('editChStatus').value = status || 'ON';
-  document.getElementById('editChModal').classList.add('open');
-}
-function closeEditChModal(){
-  document.getElementById('editChModal').classList.remove('open');
-}
-async function submitEditChannel(){
-  const id = document.getElementById('editChId').value;
-  const name = document.getElementById('editChName').value.trim();
-  const status = document.getElementById('editChStatus').value;
-  const j = await postAPI('/api/channels/update', {id:id, name:name, status:status});
-  if(j){
-    showToast('通道已更新', 'success');
-    closeEditChModal();
-    refreshAll();
-  }
-}
-
-async function toggleChannelOnline(id, nextStatus){
-  const j = await postAPI('/api/channels/update', {id:id, status:nextStatus});
-  if(j){
+async function toggleChannelStatus(chId, nextStatus){
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/channels/update', 'POST', {
+    id: chId,
+    status: nextStatus
+  });
+  if(j && j.ok){
     showToast('通道状态已设为 ' + nextStatus, 'info');
     refreshAll();
   }
 }
 
-async function bindChannelVideo(btn){
+async function bindChannelMedia(chId, btn){
   const sel = btn.parentElement.querySelector('.channel-bind-select');
-  const chId = sel.getAttribute('data-ch');
   const val = sel.value;
   let body;
-  if(val === '__synthetic__') body = {channelId:chId, source:'synthetic'};
-  else if(!val) body = {channelId:chId, source:'mp4', mp4:''};
-  else if(val.endsWith('.h264') || val.endsWith('.264')) body = {channelId:chId, source:'file', h264:val};
-  else body = {channelId:chId, source:'mp4', mp4:val};
+  if(val === '__synthetic__') body = {channelId: chId, source: 'synthetic'};
+  else if(!val) body = {channelId: chId, source: 'mp4', mp4: ''};
+  else if(val.endsWith('.h264') || val.endsWith('.264')) body = {channelId: chId, source: 'file', h264: val};
+  else body = {channelId: chId, source: 'mp4', mp4: val};
 
-  const j = await postAPI('/api/channels/bind', body);
-  if(j){
-    showToast('通道媒体绑定已更新', 'success');
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/channels/bind', 'POST', body);
+  if(j && j.ok){
+    showToast('媒体绑定已更新并存盘', 'success');
     refreshAll();
   }
 }
 
-function removeChannel(id){
-  showConfirm('删除通道', '确认删除通道 '+id+'？删除后如在 WVP 中使用，需重新拉取设备目录。', async function(){
-    const j = await postAPI('/api/channels/remove?id=' + encodeURIComponent(id));
-    if(j){ showToast('通道已删除', 'info'); refreshAll(); }
+async function removeChannel(chId){
+  if(!confirm('确定删除通道 ' + chId + ' 吗？')) return;
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/channels/remove?id=' + encodeURIComponent(chId), 'POST');
+  if(j && j.ok){
+    showToast('通道已删除', 'info');
+    refreshAll();
+  }
+}
+
+async function setDeviceMediaMode(mode){
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/media/mode', 'POST', {mode: mode});
+  if(j && j.ok){
+    showToast('媒体模式已更新为: ' + (mode==='per_channel'?'按通道独立':'全通道共用'), 'success');
+    refreshAll();
+  }
+}
+
+// SIP triggers
+async function triggerManualRegister(){
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/register', 'POST');
+  if(j && j.ok){ showToast('已发送注册请求 (SIP REGISTER)', 'success'); refreshAll(); }
+}
+async function triggerManualKeepalive(){
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/keepalive', 'POST');
+  if(j && j.ok){ showToast('已发送心跳 (Keepalive)', 'success'); }
+}
+function stopSession(callId){
+  api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/session/stop?callId=' + encodeURIComponent(callId), 'POST').then(function(j){
+    if(j && j.ok){ showToast('已终止该路推流', 'info'); refreshAll(); }
   });
 }
 
-async function setMediaMode(mode){
-  const j = await postAPI('/api/media/mode', {mode:mode});
-  if(j){
-    showToast('已切换媒体模式为: ' + (mode==='per_channel'?'按通道独立':'全通道共用'), 'success');
-    refreshAll();
-  }
-}
-
-// Alarm Modal
+// Alarm
 function openAlarmModal(){
   const sel = document.getElementById('alarmChannelSelect');
-  const chs = (globalStatus.channels || []);
+  const chs = (activeDeviceData && activeDeviceData.profile && activeDeviceData.profile.device && activeDeviceData.profile.device.channels) || [];
   if(chs.length){
     sel.innerHTML = chs.map(function(c){
       return '<option value="' + esc(c.id) + '">' + esc(c.name) + ' (' + esc(c.id) + ')</option>';
     }).join('');
   } else {
-    sel.innerHTML = '<option value="' + esc(globalStatus.deviceId) + '">主设备 (' + esc(globalStatus.deviceId) + ')</option>';
+    sel.innerHTML = '<option value="' + esc(activeDeviceId) + '">主设备 (' + esc(activeDeviceId) + ')</option>';
   }
-  document.getElementById('alarmModal').classList.add('open');
-}
-function closeAlarmModal(){
-  document.getElementById('alarmModal').classList.remove('open');
+  openModal('alarmModal');
 }
 async function submitAlarm(){
-  const channelId = document.getElementById('alarmChannelSelect').value;
-  const alarmMethod = document.getElementById('alarmMethodSelect').value;
+  const chId = document.getElementById('alarmChannelSelect').value;
+  const method = document.getElementById('alarmMethodSelect').value;
   const priority = document.getElementById('alarmPrioritySelect').value;
   const desc = document.getElementById('alarmDescInput').value.trim();
 
-  const j = await postAPI('/api/alarm', {
-    channelId: channelId,
-    alarmMethod: alarmMethod,
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/alarm', 'POST', {
+    channelId: chId,
+    alarmMethod: method,
     priority: priority,
     description: desc
   });
-  if(j){
-    showToast('模拟报警通知已发送给平台', 'success');
-    closeAlarmModal();
+  if(j && j.ok){
+    showToast('模拟报警通知已成功发出', 'success');
+    closeModal('alarmModal');
   }
 }
 
-// Video Preview & Upload
+// Video Library Modal & Player
+function openVideosModal(){
+  loadVideos();
+  openModal('videosModal');
+}
 function handleFileSelected(){
   const f = document.getElementById('uploadInput').files[0];
   if(f) document.getElementById('uploadFileName').value = f.name + ' (' + fmtSize(f.size) + ')';
@@ -1299,12 +1515,10 @@ function handleFileSelected(){
 async function uploadVideoFile(){
   const f = document.getElementById('uploadInput').files[0];
   if(!f){ showToast('请先选择要上传的视频文件', 'error'); return; }
-
   const fd = new FormData();
   fd.append('file', f);
   const btn = document.getElementById('uploadBtn');
-  btn.disabled = true; btn.textContent = '上传中…';
-
+  btn.disabled = true; btn.textContent = '上传中...';
   try{
     const r = await fetch('/api/videos/upload', {method:'POST', body:fd});
     const j = await r.json();
@@ -1314,52 +1528,82 @@ async function uploadVideoFile(){
       document.getElementById('uploadInput').value = '';
       document.getElementById('uploadFileName').value = '';
       await loadVideos();
-      await refreshAll();
     }
-  }catch(e){
-    showToast('上传网络错误: ' + e.message, 'error');
-  }
-  btn.disabled = false; btn.textContent = '上传';
+  }catch(e){ showToast('上传网络错误: ' + e.message, 'error'); }
+  btn.disabled = false; btn.textContent = '上传视频';
 }
-
-function deleteVideoFile(name){
-  showConfirm('删除视频', '确认删除视频文件 <b>' + esc(name) + '</b>？关联的抽流缓存也会一并清理。', async function(){
-    const j = await postAPI('/api/videos/delete?name=' + encodeURIComponent(name));
-    if(j){
-      showToast('已删除视频 ' + name, 'info');
-      await loadVideos();
-      await refreshAll();
-    }
-  });
+async function deleteVideoFile(name){
+  if(!confirm('确定删除视频文件 ' + name + ' 吗？关联缓存也会被清理。')) return;
+  const j = await api('/api/videos/delete?name=' + encodeURIComponent(name), 'POST');
+  if(j && j.ok){
+    showToast('视频已删除: ' + name, 'info');
+    await loadVideos();
+  }
 }
-
-function previewVideoPath(path, name){
-  if(!path){ showToast('无可用视频路径', 'error'); return; }
-  let filename = name;
-  if(!filename){
-    filename = path.replace(/\\/g, '/').split('/').pop();
-  }
-  if(!filename.toLowerCase().endsWith('.mp4')){
-    showToast('仅 MP4 文件支持在浏览器直接预览播放', 'info');
-    return;
-  }
-  const streamUrl = '/assets/' + encodeURIComponent(filename);
+function previewVideo(path, name){
+  const filename = name || path.split('/').pop();
   const player = document.getElementById('previewPlayer');
-  document.getElementById('videoModalTitle').textContent = '在线预览 · ' + filename;
-  player.src = streamUrl;
-  document.getElementById('videoModal').classList.add('open');
+  document.getElementById('videoPreviewTitle').textContent = '在线预览 · ' + filename;
+  player.src = '/assets/' + encodeURIComponent(filename);
+  openModal('videoPreviewModal');
   player.play().catch(function(){});
 }
 function closeVideoModal(){
   const player = document.getElementById('previewPlayer');
   player.pause();
   player.src = '';
-  document.getElementById('videoModal').classList.remove('open');
+  closeModal('videoPreviewModal');
 }
 
-// Initial bootstrap & interval
-loadVideos().then(function(){ refreshAll() });
-setInterval(refreshAll, 3500);
+// Logs
+async function loadLogs(){
+  if(!activeDeviceId) return;
+  const q = document.getElementById('logKeyword').value.trim();
+  const url = '/api/devices/' + encodeURIComponent(activeDeviceId) + '/logs?n=300' + (q ? ('&q=' + encodeURIComponent(q)) : '');
+  const j = await api(url);
+  if(j) {
+    rawLogs = j.lines || [];
+    renderLogs();
+  }
+}
+function renderLogs(){
+  const box = document.getElementById('logBox');
+  if(!rawLogs.length){
+    box.innerHTML = '<div style="color:var(--text-dim);padding:8px">（暂无日志）</div>';
+    return;
+  }
+  box.innerHTML = rawLogs.map(function(l){
+    let tag = 'other';
+    let tagClass = '';
+    const lower = l.toLowerCase();
+    if(lower.includes('[sip]')) { tag = 'SIP'; tagClass = 'sip'; }
+    else if(lower.includes('[media]')) { tag = 'MEDIA'; tagClass = 'media'; }
+    else if(lower.includes('[gb]')) { tag = 'GB'; tagClass = 'gb'; }
+    else if(lower.includes('error') || lower.includes('failed')) { tagClass = 'err'; }
+
+    return '<div class="log-line">' +
+      (tag!=='other' ? ('<span class="log-tag ' + tagClass + '">' + tag + '</span>') : '') +
+      '<span>' + esc(l) + '</span>' +
+    '</div>';
+  }).join('');
+
+  if(document.getElementById('autoScroll').checked){
+    box.scrollTop = box.scrollHeight;
+  }
+}
+function exportLogs(){
+  const blob = new Blob([rawLogs.join('\n')], {type:'text/plain;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'gb28181_' + activeDeviceId + '.log';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Bootstrap
+refreshAll();
+setInterval(function(){ refreshAll(); }, 3500);
 </script>
 </body>
 </html>

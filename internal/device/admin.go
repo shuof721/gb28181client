@@ -43,7 +43,7 @@ func (d *Device) cfgRLock() { d.cfgMu.RLock() }
 func (d *Device) cfgRUnlock() { d.cfgMu.RUnlock() }
 
 // ListVideos 列出 assets 下可播放视频。
-func (d *Device) ListVideos() ([]VideoItem, error) {
+func ListVideos() ([]VideoItem, error) {
 	entries, err := os.ReadDir(AssetsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -79,6 +79,10 @@ func (d *Device) ListVideos() ([]VideoItem, error) {
 	return out, nil
 }
 
+func (d *Device) ListVideos() ([]VideoItem, error) {
+	return ListVideos()
+}
+
 // AddChannel 运行时新增通道，并可选绑定视频。
 func (d *Device) AddChannel(req AddChannelRequest) error {
 	id := config.NormalizeGBID(req.ID)
@@ -91,10 +95,10 @@ func (d *Device) AddChannel(req AddChannelRequest) error {
 	}
 
 	d.cfgLock()
-	defer d.cfgUnlock()
 
 	for _, ch := range d.cfg.Device.Channels {
 		if ch.ID == id {
+			d.cfgUnlock()
 			return fmt.Errorf("通道已存在: %s", id)
 		}
 	}
@@ -123,7 +127,12 @@ func (d *Device) AddChannel(req AddChannelRequest) error {
 		}
 	}
 
+	d.cfgUnlock()
+
 	log.Printf("[ui] channel added id=%s name=%s mp4=%q", id, name, req.MP4)
+	if d.OnConfigChanged != nil {
+		d.OnConfigChanged(d.cfg)
+	}
 	return nil
 }
 
@@ -184,10 +193,14 @@ func (d *Device) BindChannelVideo(req BindChannelRequest) error {
 	}
 
 	d.cfg.Media.Channels[id] = cfg
+	d.cfgUnlock()
 	log.Printf("[ui] bind channel %s source=%s mp4=%s h264=%s", id, cfg.Source, cfg.MP4File, cfg.H264File)
 
 	// 若该通道正在播，停掉让下次点播用新源
 	go d.ms.StopByChannel(id)
+	if d.OnConfigChanged != nil {
+		d.OnConfigChanged(d.cfg)
+	}
 	return nil
 }
 
@@ -195,19 +208,27 @@ func (d *Device) BindChannelVideo(req BindChannelRequest) error {
 func (d *Device) RemoveChannel(id string) error {
 	id = config.NormalizeGBID(id)
 	d.cfgLock()
-	defer d.cfgUnlock()
+	found := false
 	for i, ch := range d.cfg.Device.Channels {
 		if ch.ID == id {
 			d.cfg.Device.Channels = append(d.cfg.Device.Channels[:i], d.cfg.Device.Channels[i+1:]...)
 			if d.cfg.Media.Channels != nil {
 				delete(d.cfg.Media.Channels, id)
 			}
-			log.Printf("[ui] channel removed %s", id)
-			go d.ms.StopByChannel(id)
-			return nil
+			found = true
+			break
 		}
 	}
-	return fmt.Errorf("通道不存在: %s", id)
+	d.cfgUnlock()
+	if !found {
+		return fmt.Errorf("通道不存在: %s", id)
+	}
+	log.Printf("[ui] channel removed %s", id)
+	go d.ms.StopByChannel(id)
+	if d.OnConfigChanged != nil {
+		d.OnConfigChanged(d.cfg)
+	}
+	return nil
 }
 
 // SetMediaMode shared | per_channel
@@ -220,11 +241,14 @@ func (d *Device) SetMediaMode(mode string) error {
 	d.cfg.Media.Mode = mode
 	d.cfgUnlock()
 	log.Printf("[ui] media mode -> %s", mode)
+	if d.OnConfigChanged != nil {
+		d.OnConfigChanged(d.cfg)
+	}
 	return nil
 }
 
 // DeleteVideo 从 assets 中删除视频及抽流缓存。
-func (d *Device) DeleteVideo(name string) error {
+func DeleteVideo(name string) error {
 	name = filepath.Base(name)
 	name = strings.ReplaceAll(name, "\\", "/")
 	if i := strings.LastIndex(name, "/"); i >= 0 {
@@ -245,6 +269,10 @@ func (d *Device) DeleteVideo(name string) error {
 	return nil
 }
 
+func (d *Device) DeleteVideo(name string) error {
+	return DeleteVideo(name)
+}
+
 // UpdateChannelRequest 更新通道信息。
 type UpdateChannelRequest struct {
 	ID     string `json:"id"`
@@ -256,7 +284,9 @@ type UpdateChannelRequest struct {
 func (d *Device) UpdateChannel(req UpdateChannelRequest) error {
 	id := config.NormalizeGBID(req.ID)
 	d.cfgLock()
-	defer d.cfgUnlock()
+	found := false
+	name := ""
+	status := ""
 	for i := range d.cfg.Device.Channels {
 		if d.cfg.Device.Channels[i].ID == id {
 			if strings.TrimSpace(req.Name) != "" {
@@ -269,12 +299,22 @@ func (d *Device) UpdateChannel(req UpdateChannelRequest) error {
 					go d.ms.StopByChannel(id)
 				}
 			}
-			log.Printf("[ui] channel updated id=%s name=%s status=%s", id, d.cfg.Device.Channels[i].Name, d.cfg.Device.Channels[i].Status)
-			go d.SendCatalogNotify()
-			return nil
+			found = true
+			name = d.cfg.Device.Channels[i].Name
+			status = d.cfg.Device.Channels[i].Status
+			break
 		}
 	}
-	return fmt.Errorf("通道不存在: %s", id)
+	d.cfgUnlock()
+	if !found {
+		return fmt.Errorf("通道不存在: %s", id)
+	}
+	log.Printf("[ui] channel updated id=%s name=%s status=%s", id, name, status)
+	go d.SendCatalogNotify()
+	if d.OnConfigChanged != nil {
+		d.OnConfigChanged(d.cfg)
+	}
+	return nil
 }
 
 func normalizeVideoPath(p string) string {

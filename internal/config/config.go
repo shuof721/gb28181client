@@ -9,95 +9,125 @@ import (
 )
 
 type Config struct {
-	SIP     SIPConfig     `yaml:"sip"`
-	Device  DeviceConfig  `yaml:"device"`
-	Media   MediaConfig   `yaml:"media"`
-	Logging LoggingConfig `yaml:"logging"`
-	UI      UIConfig      `yaml:"ui"`
+	SIP     SIPConfig     `yaml:"sip" json:"sip"`
+	Device  DeviceConfig  `yaml:"device" json:"device"`
+	Media   MediaConfig   `yaml:"media" json:"media"`
+	Logging LoggingConfig `yaml:"logging" json:"logging"`
+	UI      UIConfig      `yaml:"ui" json:"ui"`
+}
+
+// DeviceProfile 单个模拟设备的持久化配置（JSON 存储）。
+type DeviceProfile struct {
+	Enabled bool         `yaml:"enabled" json:"enabled"`
+	SIP     SIPConfig    `yaml:"sip" json:"sip"`
+	Device  DeviceConfig `yaml:"device" json:"device"`
+	Media   MediaConfig  `yaml:"media" json:"media"`
+}
+
+func (p *DeviceProfile) ToConfig() *Config {
+	cfg := &Config{
+		SIP:    p.SIP,
+		Device: p.Device,
+		Media:  p.Media,
+	}
+	cfg.applyDefaults()
+	return cfg
+}
+
+func (p *DeviceProfile) ApplyDefaults() {
+	cfg := p.ToConfig()
+	p.SIP = cfg.SIP
+	p.Device = cfg.Device
+	p.Media = cfg.Media
+}
+
+func (p *DeviceProfile) Validate() error {
+	cfg := p.ToConfig()
+	return cfg.Validate()
 }
 
 type UIConfig struct {
 	// 轻量 Web 控制台，空或 enabled=false 则不启动
-	Enabled bool `yaml:"enabled"`
-	Listen  string `yaml:"listen"` // 如 "127.0.0.1:8080"
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+	Listen  string `yaml:"listen" json:"listen"` // 如 "127.0.0.1:8080"
 }
 
 type SIPConfig struct {
 	// 平台侧
-	ServerIP   string `yaml:"server_ip"`
-	ServerPort int    `yaml:"server_port"`
+	ServerIP   string `yaml:"server_ip" json:"server_ip"`
+	ServerPort int    `yaml:"server_port" json:"server_port"`
 	// 本地监听
-	LocalIP   string `yaml:"local_ip"`
-	LocalPort int    `yaml:"local_port"`
+	LocalIP   string `yaml:"local_ip" json:"local_ip"`
+	LocalPort int    `yaml:"local_port" json:"local_port"`
 	// 传输：udp / tcp
-	Transport string `yaml:"transport"`
+	Transport string `yaml:"transport" json:"transport"`
 	// 注册
-	Username string `yaml:"username"` // 通常等于 DeviceID
-	Password string `yaml:"password"`
+	Username string `yaml:"username" json:"username"` // 通常等于 DeviceID
+	Password string `yaml:"password" json:"password"`
 	// 注册有效期（秒），过期前会自动刷新
-	Expires int `yaml:"expires"`
+	Expires int `yaml:"expires" json:"expires"`
 	// 心跳间隔（秒）
-	KeepaliveInterval int `yaml:"keepalive_interval"`
+	KeepaliveInterval int `yaml:"keepalive_interval" json:"keepalive_interval"`
 	// 心跳超时次数，超过后重新注册
-	KeepaliveTimeoutCount int `yaml:"keepalive_timeout_count"`
+	KeepaliveTimeoutCount int `yaml:"keepalive_timeout_count" json:"keepalive_timeout_count"`
 }
 
 type DeviceConfig struct {
 	// 20 位国标设备编码
-	ID           string `yaml:"id"`
-	Domain       string `yaml:"domain"` // 通常为 ID 前 10 位
-	Name         string `yaml:"name"`
-	Manufacturer string `yaml:"manufacturer"`
-	Model        string `yaml:"model"`
-	Firmware     string `yaml:"firmware"`
+	ID           string          `yaml:"id" json:"id"`
+	Domain       string          `yaml:"domain" json:"domain"` // 通常为 ID 前 10 位
+	Name         string          `yaml:"name" json:"name"`
+	Manufacturer string          `yaml:"manufacturer" json:"manufacturer"`
+	Model        string          `yaml:"model" json:"model"`
+	Firmware     string          `yaml:"firmware" json:"firmware"`
 	// NVR 下挂通道
-	Channels []ChannelConfig `yaml:"channels"`
+	Channels     []ChannelConfig `yaml:"channels" json:"channels"`
 }
 
 type ChannelConfig struct {
-	ID           string `yaml:"id"`
-	Name         string `yaml:"name"`
-	Manufacturer string `yaml:"manufacturer"`
-	Model        string `yaml:"model"`
-	Address      string `yaml:"address"`
+	ID           string `yaml:"id" json:"id"`
+	Name         string `yaml:"name" json:"name"`
+	Manufacturer string `yaml:"manufacturer" json:"manufacturer"`
+	Model        string `yaml:"model" json:"model"`
+	Address      string `yaml:"address" json:"address"`
 	// ON / OFF
-	Status     string `yaml:"status"`
-	Parental   int    `yaml:"parental"`
-	ParentID   string `yaml:"parent_id"`
-	SafetyWay  int    `yaml:"safety_way"`
-	RegisterWay int   `yaml:"register_way"`
-	Secrecy    int    `yaml:"secrecy"`
-	CivilCode  string `yaml:"civil_code"`
+	Status       string `yaml:"status" json:"status"`
+	Parental     int    `yaml:"parental" json:"parental"`
+	ParentID     string `yaml:"parent_id" json:"parent_id"`
+	SafetyWay    int    `yaml:"safety_way" json:"safety_way"`
+	RegisterWay  int    `yaml:"register_way" json:"register_way"`
+	Secrecy      int    `yaml:"secrecy" json:"secrecy"`
+	CivilCode    string `yaml:"civil_code" json:"civil_code"`
 }
 
 type MediaConfig struct {
 	// shared:     所有通道共用下面的 source/mp4_file/h264_file
 	// per_channel: 按 channels[通道ID] 配置各自视频；未配置的通道回退到全局
-	Mode string `yaml:"mode"`
+	Mode string `yaml:"mode" json:"mode"`
 	// synthetic | file | mp4
-	Source string `yaml:"source"`
+	Source string `yaml:"source" json:"source"`
 	// file 源时的 Annex-B H.264 文件路径
-	H264File string `yaml:"h264_file"`
+	H264File string `yaml:"h264_file" json:"h264_file"`
 	// mp4 源时的本地 MP4 路径（点播时抽 H.264 循环推流）
-	MP4File string `yaml:"mp4_file"`
+	MP4File string `yaml:"mp4_file" json:"mp4_file"`
 	// per_channel 模式：key = 20 位通道国标编号
-	Channels map[string]ChannelMediaConfig `yaml:"channels"`
+	Channels map[string]ChannelMediaConfig `yaml:"channels" json:"channels"`
 	// 宽高（synthetic 源）
-	Width  int `yaml:"width"`
-	Height int `yaml:"height"`
+	Width  int `yaml:"width" json:"width"`
+	Height int `yaml:"height" json:"height"`
 	// 帧率
-	FPS int `yaml:"fps"`
+	FPS int `yaml:"fps" json:"fps"`
 	// RTP 包最大负载（不含 RTP 头）
-	RTPPayloadMax int `yaml:"rtp_payload_max"`
+	RTPPayloadMax int `yaml:"rtp_payload_max" json:"rtp_payload_max"`
 	// 本地媒体 IP（发送 RTP 的源地址），默认同 sip.local_ip
-	LocalIP string `yaml:"local_ip"`
+	LocalIP string `yaml:"local_ip" json:"local_ip"`
 }
 
 // ChannelMediaConfig 单个通道的媒体源。
 type ChannelMediaConfig struct {
-	Source  string `yaml:"source"`     // synthetic | file | mp4，空则继承全局
-	H264File string `yaml:"h264_file"`
-	MP4File  string `yaml:"mp4_file"`
+	Source   string `yaml:"source" json:"source"` // synthetic | file | mp4，空则继承全局
+	H264File string `yaml:"h264_file" json:"h264_file"`
+	MP4File  string `yaml:"mp4_file" json:"mp4_file"`
 }
 
 // NormalizeGBID 把 WVP 等平台可能带来的 "通道ID:SSRC" 规范为 20 位国标编号。

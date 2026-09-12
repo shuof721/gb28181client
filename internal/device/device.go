@@ -30,6 +30,8 @@ type Device struct {
 	srcClose  func() error
 	startedAt time.Time
 	logs      *LogBuffer
+
+	OnConfigChanged func(cfg *config.Config)
 }
 
 func New(cfg *config.Config) *Device {
