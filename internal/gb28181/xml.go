@@ -19,6 +19,8 @@ type Root struct {
 	CmdType  string `xml:"CmdType"`
 	SN       string `xml:"SN"`
 	DeviceID string `xml:"DeviceID"`
+	SourceID string `xml:"SourceID"`
+	TargetID string `xml:"TargetID"`
 }
 
 // charsetReader 支持国标设备常见的 GB2312/GBK/GB18030 声明。

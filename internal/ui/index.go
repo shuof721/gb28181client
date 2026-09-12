@@ -486,7 +486,7 @@ select{cursor:pointer}
       </div>
       <div class="tab-group">
         <button class="tab-btn active" onclick="switchWorkbenchTab('channels', this)">通道列表与视频源</button>
-        <button class="tab-btn" onclick="switchWorkbenchTab('sessions', this)">实时点播会话</button>
+        <button class="tab-btn" id="tabBtnSessions" onclick="switchWorkbenchTab('sessions', this)">实时点播与对讲</button>
         <button class="tab-btn" onclick="switchWorkbenchTab('logs', this)">设备运行日志</button>
         <button class="tab-btn" onclick="switchWorkbenchTab('records', this)">虚拟录像排程与查询</button>
       </div>
@@ -516,6 +516,10 @@ select{cursor:pointer}
 
     <!-- Tab 2: Sessions -->
     <div class="panel-body" id="tabSessions" style="display:none">
+      <div id="talkSessionContainer" style="margin-bottom:16px"></div>
+      <div style="font-size:12px;font-weight:700;color:var(--text-muted);margin-bottom:8px;display:flex;align-items:center;gap:6px">
+        <span>📹 实时视频点播会话 (Video Sessions)</span>
+      </div>
       <div id="sessionListContainer">
         <!-- Sessions rendered here -->
       </div>
@@ -1334,6 +1338,15 @@ async function loadActiveDeviceDetail(){
 
   renderChannels(devCfg.channels || [], prof.media || {}, st.sessions || []);
   renderSessions(st.sessions || []);
+  renderTalkSessions(st.talkSessions || []);
+  const tabBtn = document.getElementById('tabBtnSessions');
+  if(tabBtn){
+    if(st.talkSessions && st.talkSessions.length > 0){
+      tabBtn.innerHTML = '实时点播与对讲 <span style="background:#e11d48;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700">🎙️ 对讲中 (' + st.talkSessions.length + ')</span>';
+    } else {
+      tabBtn.innerHTML = '实时点播与对讲';
+    }
+  }
   updateRecordChannelOptions(devCfg.channels || [], activeDeviceId);
   if(document.getElementById('tabRecords').style.display !== 'none'){
     loadDeviceRecords();
@@ -1420,6 +1433,244 @@ function renderSessions(sessions){
       '<button class="btn btn-sm btn-danger" onclick="stopSession(\'' + esc(s.callId) + '\')">停止推流</button>' +
     '</div>';
   }).join('');
+}
+
+// Voice Intercom / Broadcast State & Functions
+let talkWS = null;
+let talkWSSessionCallId = '';
+let talkAudioCtx = null;
+let talkNextPlayTime = 0;
+let talkSpeakerEnabled = false;
+let talkMicStream = null;
+let talkMicProcessor = null;
+let isTalkingMic = false;
+
+function renderTalkSessions(talkSessions){
+  const container = document.getElementById('talkSessionContainer');
+  if(!container) return;
+  if(!talkSessions || !talkSessions.length){
+    if(talkWS){
+      talkWS.close();
+      talkWS = null;
+      talkWSSessionCallId = '';
+    }
+    stopTalkMic();
+    container.innerHTML = '<div style="background:rgba(255,255,255,0.02);border:1px dashed var(--border);border-radius:8px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">' +
+      '<div style="display:flex;align-items:center;gap:10px">' +
+        '<div style="width:32px;height:32px;border-radius:50%;background:rgba(59,130,246,0.1);display:flex;align-items:center;justify-content:center;font-size:16px">🎙️</div>' +
+        '<div>' +
+          '<div style="font-weight:700;color:var(--text-main);font-size:12px">语音对讲与广播通道已就绪 (GB/T 28181 附录 B/C)</div>' +
+          '<div style="font-size:11px;color:var(--text-dim);margin-top:2px">支持 G.711A (PCMA/8000Hz) 双向对讲与下行广播。在平台（如 WVP）上点击通道对讲时将在此处实时联动。</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+    return;
+  }
+
+  const s = talkSessions[0];
+  if(talkSpeakerEnabled && (!talkWS || talkWSSessionCallId !== s.callId)){
+    ensureTalkWS(s.callId);
+  }
+
+  const rxPct = Math.min(100, Math.max(0, s.rxVolume || 0));
+  const txPct = Math.min(100, Math.max(0, s.txVolume || 0));
+
+  container.innerHTML = '<div style="background:linear-gradient(135deg, rgba(225,29,72,0.08) 0%, rgba(30,41,59,0.7) 100%);border:1px solid rgba(225,29,72,0.3);border-radius:10px;padding:16px;box-shadow:0 4px 20px rgba(0,0,0,0.3)">' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">' +
+      '<div style="display:flex;align-items:center;gap:8px">' +
+        '<span class="badge" style="background:#e11d48;color:#fff;font-size:11px;padding:2px 8px;font-weight:700"><span class="dot" style="background:#fff"></span>🎙️ ' + esc(s.streamType==='broadcast'?'语音广播中':'双向对讲中') + '</span>' +
+        '<span style="font-weight:700;color:#fff;font-size:13px">' + esc(s.channelId) + '</span>' +
+        '<span style="font-size:11px;color:var(--text-dim);font-family:var(--font-mono)">' + esc(s.audioCodec||'PCMA') + ' / 8000Hz · SSRC: ' + esc(s.ssrc) + '</span>' +
+      '</div>' +
+      '<div style="display:flex;gap:6px">' +
+        '<button class="btn btn-sm ' + (talkSpeakerEnabled ? 'btn-primary' : '') + '" onclick="toggleTalkSpeaker(\'' + esc(s.callId) + '\')">' + (talkSpeakerEnabled ? '🔊 扬声器已开启 (点击静音)' : '🔈 开启扬声器收听') + '</button>' +
+        '<button class="btn btn-sm btn-danger" onclick="stopTalkSession(\'' + esc(s.callId) + '\')">挂断对讲</button>' +
+      '</div>' +
+    '</div>' +
+
+    // VU Meters
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;background:rgba(0,0,0,0.25);border-radius:8px;padding:12px;margin-bottom:12px">' +
+      '<div>' +
+        '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-dim);margin-bottom:4px">' +
+          '<span>下行平台收音 (平台 → 设备)</span>' +
+          '<span style="font-family:var(--font-mono)">' + Math.round(rxPct) + '%</span>' +
+        '</div>' +
+        '<div style="height:8px;background:#1e293b;border-radius:4px;overflow:hidden">' +
+          '<div style="width:' + rxPct + '%;height:100%;background:linear-gradient(90deg, #10b981, #f59e0b);transition:width 0.1s ease;border-radius:4px"></div>' +
+        '</div>' +
+        '<div style="font-size:10px;font-family:var(--font-mono);color:var(--text-dim);margin-top:4px">' +
+          '接收包数: ' + s.rxPackets + ' · 流量: ' + fmtSize(s.rxBytes) +
+        '</div>' +
+      '</div>' +
+      '<div>' +
+        '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-dim);margin-bottom:4px">' +
+          '<span>上行设备发音 (设备 → 平台)</span>' +
+          '<span style="font-family:var(--font-mono)">' + Math.round(txPct) + '%</span>' +
+        '</div>' +
+        '<div style="height:8px;background:#1e293b;border-radius:4px;overflow:hidden">' +
+          '<div style="width:' + txPct + '%;height:100%;background:linear-gradient(90deg, #3b82f6, #8b5cf6);transition:width 0.1s ease;border-radius:4px"></div>' +
+        '</div>' +
+        '<div style="font-size:10px;font-family:var(--font-mono);color:var(--text-dim);margin-top:4px">' +
+          '推流包数: ' + s.txPackets + ' · 流量: ' + fmtSize(s.txBytes) +
+        '</div>' +
+      '</div>' +
+    '</div>' +
+
+    // Control bar for talking
+    '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">' +
+      '<div style="display:flex;align-items:center;gap:8px">' +
+        '<span style="font-size:12px;color:var(--text-muted)">向平台推流声音源:</span>' +
+        '<select class="channel-bind-select" style="width:180px" onchange="setTalkUplinkMode(\'' + esc(s.callId) + '\', this.value)">' +
+          '<option value="synthetic" ' + (s.uplinkMode==='synthetic'?'selected':'') + '>🎵 内置蜂鸣提示音</option>' +
+          '<option value="mic" ' + (s.uplinkMode==='mic'?'selected':'') + '>🎤 浏览器麦克风喊话</option>' +
+        '</select>' +
+      '</div>' +
+      '<div style="display:flex;align-items:center;gap:8px">' +
+        (s.uplinkMode==='mic' ?
+          ('<button class="btn btn-sm btn-primary" id="btnTalkMic" style="background:#e11d48;border-color:#e11d48;font-weight:700;padding:6px 14px" ' +
+            'onmousedown="startTalkMic(\'' + esc(s.callId) + '\')" onmouseup="stopTalkMic()" onmouseleave="stopTalkMic()" ' +
+            'ontouchstart="startTalkMic(\'' + esc(s.callId) + '\')" ontouchend="stopTalkMic()">' +
+            '🎙️ 按住对讲 (Push-to-Talk)' +
+          '</button>') :
+          '<span style="font-size:11px;color:var(--text-dim)">平台当前正在收听内置模拟蜂鸣提示音</span>'
+        ) +
+      '</div>' +
+    '</div>' +
+  '</div>';
+}
+
+function ensureTalkWS(callId){
+  if(talkWS && talkWS.readyState === WebSocket.OPEN && talkWSSessionCallId === callId) return;
+  if(talkWS) talkWS.close();
+  talkWSSessionCallId = callId;
+  const proto = (location.protocol === 'https:') ? 'wss://' : 'ws://';
+  const url = proto + location.host + '/api/devices/' + encodeURIComponent(activeDeviceId) + '/talk/ws?callId=' + encodeURIComponent(callId);
+  try {
+    talkWS = new WebSocket(url);
+    talkWS.binaryType = 'arraybuffer';
+    talkWS.onmessage = function(ev){
+      if(ev.data instanceof ArrayBuffer){
+        playPCMFrames(ev.data);
+      }
+    };
+    talkWS.onclose = function(){ talkWS = null; };
+    talkWS.onerror = function(){ talkWS = null; };
+  } catch(e) {
+    console.error('talk ws error:', e);
+  }
+}
+
+function playPCMFrames(arrayBuffer){
+  if(!talkSpeakerEnabled) return;
+  if(!talkAudioCtx){
+    talkAudioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
+  }
+  if(talkAudioCtx.state === 'suspended'){
+    talkAudioCtx.resume();
+  }
+  const int16 = new Int16Array(arrayBuffer);
+  const float32 = new Float32Array(int16.length);
+  for(let i = 0; i < int16.length; i++){
+    float32[i] = int16[i] / 32768.0;
+  }
+  const buffer = talkAudioCtx.createBuffer(1, float32.length, 8000);
+  buffer.getChannelData(0).set(float32);
+
+  const src = talkAudioCtx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(talkAudioCtx.destination);
+
+  const now = talkAudioCtx.currentTime;
+  if(talkNextPlayTime < now){
+    talkNextPlayTime = now;
+  }
+  src.start(talkNextPlayTime);
+  talkNextPlayTime += buffer.duration;
+}
+
+function toggleTalkSpeaker(callId){
+  talkSpeakerEnabled = !talkSpeakerEnabled;
+  if(talkSpeakerEnabled){
+    if(talkAudioCtx && talkAudioCtx.state === 'suspended') talkAudioCtx.resume();
+    ensureTalkWS(callId);
+    showToast('扬声器已开启，正在收听平台声音', 'success');
+  } else {
+    talkNextPlayTime = 0;
+    showToast('扬声器已静音', 'info');
+  }
+  refreshAll();
+}
+
+async function startTalkMic(callId){
+  isTalkingMic = true;
+  const btn = document.getElementById('btnTalkMic');
+  if(btn){
+    btn.style.background = '#9f1239';
+    btn.innerText = '🔴 正在说话... (松开停止)';
+  }
+  try {
+    ensureTalkWS(callId);
+    if(!talkMicStream){
+      talkMicStream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 8000, channelCount: 1 } });
+    }
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const micSrc = ctx.createMediaStreamSource(talkMicStream);
+    const proc = ctx.createScriptProcessor(512, 1, 1);
+    proc.onaudioprocess = function(e){
+      if(!isTalkingMic) return;
+      const input = e.inputBuffer.getChannelData(0);
+      const step = e.inputBuffer.sampleRate / 8000;
+      const outLen = Math.floor(input.length / step);
+      const pcm16 = new Int16Array(outLen);
+      for(let i = 0; i < outLen; i++){
+        let s = input[Math.floor(i * step)];
+        if(s < -1) s = -1;
+        if(s > 1) s = 1;
+        pcm16[i] = s < 0 ? s * 32768 : s * 32767;
+      }
+      if(talkWS && talkWS.readyState === WebSocket.OPEN){
+        talkWS.send(pcm16.buffer);
+      }
+    };
+    micSrc.connect(proc);
+    proc.connect(ctx.destination);
+    talkMicProcessor = proc;
+  } catch(err){
+    console.error('mic error:', err);
+    showToast('无法启用麦克风: ' + err.message, 'error');
+  }
+}
+
+function stopTalkMic(){
+  isTalkingMic = false;
+  const btn = document.getElementById('btnTalkMic');
+  if(btn){
+    btn.style.background = '#e11d48';
+    btn.innerText = '🎙️ 按住对讲 (Push-to-Talk)';
+  }
+  if(talkMicProcessor){
+    talkMicProcessor.disconnect();
+    talkMicProcessor = null;
+  }
+}
+
+async function setTalkUplinkMode(callId, mode){
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/talk/mode?callId=' + encodeURIComponent(callId) + '&mode=' + encodeURIComponent(mode), 'POST');
+  if(j && j.ok){
+    showToast('上行推流模式已切换为: ' + (mode==='mic'?'麦克风喊话':'模拟提示音'), 'success');
+    refreshAll();
+  }
+}
+
+async function stopTalkSession(callId){
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/talk/stop?callId=' + encodeURIComponent(callId), 'POST');
+  if(j && j.ok){
+    showToast('对讲会话已终止', 'info');
+    if(talkWS) talkWS.close();
+    talkSpeakerEnabled = false;
+    stopTalkMic();
+    refreshAll();
+  }
 }
 
 // Load Videos in assets

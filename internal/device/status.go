@@ -3,6 +3,8 @@ package device
 import (
 	"sync"
 	"time"
+
+	"github.com/local/gb28181-device/internal/media"
 )
 
 // LogBuffer 最近日志环形缓冲，供 Web UI 展示。
@@ -49,9 +51,10 @@ type Status struct {
 	Transport  string    `json:"transport"`
 	MediaMode  string    `json:"mediaMode"`
 	MediaSource string   `json:"mediaSource"`
-	Channels   []ChannelStatus `json:"channels"`
-	Sessions   []any     `json:"sessions"`
-	UptimeSec  int64     `json:"uptimeSec"`
+	Channels     []ChannelStatus        `json:"channels"`
+	Sessions     []any                  `json:"sessions"`
+	TalkSessions []media.TalkSessionInfo `json:"talkSessions"`
+	UptimeSec    int64                  `json:"uptimeSec"`
 	StartedAt  time.Time `json:"startedAt"`
 }
 

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"github.com/local/gb28181-device/internal/config"
 	"github.com/local/gb28181-device/internal/device"
 	"github.com/local/gb28181-device/internal/gb28181"
+	"github.com/local/gb28181-device/internal/media"
 )
 
 const maxUploadBytes = 512 << 20 // 512MB
@@ -129,6 +131,21 @@ func (s *Server) handleDeviceDispatch(w http.ResponseWriter, r *http.Request) {
 			s.handleDeviceStopSession(w, r, id)
 		} else {
 			writeErr(w, 404, "Not found")
+		}
+	case "talk":
+		if len(parts) >= 3 {
+			switch parts[2] {
+			case "ws":
+				s.handleDeviceTalkWS(w, r, id)
+			case "mode":
+				s.handleDeviceTalkMode(w, r, id)
+			case "stop":
+				s.handleDeviceTalkStop(w, r, id)
+			default:
+				writeErr(w, 404, "Not found")
+			}
+		} else {
+			s.handleDeviceTalkSessions(w, r, id)
 		}
 	case "logs":
 		s.handleDeviceLogs(w, r, id)
@@ -430,6 +447,128 @@ func (s *Server) handleDeviceStopSession(w http.ResponseWriter, r *http.Request,
 	}
 	dev.StopSession(callID)
 	writeJSON(w, 200, map[string]string{"ok": "stopped"})
+}
+
+func (s *Server) handleDeviceTalkSessions(w http.ResponseWriter, r *http.Request, id string) {
+	dev, err := s.mgr.GetDevice(id)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"sessions": dev.TalkManager().ListSessions()})
+}
+
+func (s *Server) handleDeviceTalkStop(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	dev, err := s.mgr.GetDevice(id)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	callID := r.URL.Query().Get("callId")
+	if callID != "" {
+		dev.TalkManager().StopByCallID(callID)
+	} else {
+		dev.TalkManager().StopAll()
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) handleDeviceTalkMode(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	dev, err := s.mgr.GetDevice(id)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+
+	var req struct {
+		CallID string `json:"callId"`
+		Mode   string `json:"mode"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.Mode == "" {
+		req.Mode = r.URL.Query().Get("mode")
+	}
+	if req.CallID == "" {
+		req.CallID = r.URL.Query().Get("callId")
+	}
+
+	tm := dev.TalkManager()
+	var sess *media.TalkSession
+	if req.CallID != "" {
+		sess = tm.GetSession(req.CallID)
+	} else {
+		sess = tm.GetActiveSession()
+	}
+	if sess == nil {
+		writeErr(w, 404, "no active talk session")
+		return
+	}
+	sess.SetUplinkMode(req.Mode)
+	writeJSON(w, 200, map[string]any{"ok": true, "mode": sess.UplinkMode()})
+}
+
+func (s *Server) handleDeviceTalkWS(w http.ResponseWriter, r *http.Request, id string) {
+	dev, err := s.mgr.GetDevice(id)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	tm := dev.TalkManager()
+	callID := r.URL.Query().Get("callId")
+	var sess *media.TalkSession
+	if callID != "" {
+		sess = tm.GetSession(callID)
+	} else {
+		sess = tm.GetActiveSession()
+	}
+	if sess == nil {
+		writeErr(w, 404, "no active talk session")
+		return
+	}
+
+	ws, err := UpgradeWS(w, r)
+	if err != nil {
+		log.Printf("[talk-ws] upgrade failed: %v", err)
+		return
+	}
+	defer ws.Close()
+
+	pcmCh := make(chan []byte, 40)
+	sess.RegisterListener(pcmCh)
+	defer sess.UnregisterListener(pcmCh)
+
+	// 协程：将接收自平台的 PCM 音频推给浏览器
+	go func() {
+		for pcm := range pcmCh {
+			if err := ws.WriteBinary(pcm); err != nil {
+				return
+			}
+		}
+	}()
+
+	// 主循环：读取浏览器麦克风发来的 PCM 音频
+	for {
+		payload, isBinary, err := ws.ReadFrame()
+		if err != nil {
+			return
+		}
+		if isBinary && len(payload) > 0 {
+			numSamples := len(payload) / 2
+			samples := make([]int16, numSamples)
+			for i := 0; i < numSamples; i++ {
+				samples[i] = int16(binary.LittleEndian.Uint16(payload[i*2 : i*2+2]))
+			}
+			sess.PushMicPCM(samples)
+		}
+	}
 }
 
 func (s *Server) handleDeviceLogs(w http.ResponseWriter, r *http.Request, id string) {

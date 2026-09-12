@@ -13,17 +13,19 @@ import (
 
 // SDP 描述
 type SDPInfo struct {
-	SessionName string // Play / Playback / Talk
-	Owner       string
-	IP          string // c= 媒体地址
-	AudioPort   int
-	VideoPort   int
-	SSRC        string // y= 行
-	IsTCP       bool
-	TCPMode     string // passive / active
-	StartTime   string // t=
-	EndTime     string
-	Raw         string
+	SessionName  string // Play / Playback / Talk
+	Owner        string
+	IP           string // c= 媒体地址
+	AudioPort    int
+	VideoPort    int
+	AudioPayload int    // m=audio 载荷类型 (如 8 为 PCMA, 0 为 PCMU)
+	SSRC         string // y= 行
+	IsTCP        bool
+	TCPMode      string // passive / active
+	Direction    string // sendrecv / recvonly / sendonly
+	StartTime    string // t=
+	EndTime      string
+	Raw          string
 }
 
 // ParseSDP 从 SDP 文本提取媒体参数（足够 GB28181 点播使用）。
@@ -56,6 +58,7 @@ func ParseSDP(s string) (*SDPInfo, error) {
 		case strings.HasPrefix(line, "m="):
 			// m=video 30000 RTP/AVP 96 97 98
 			// m=video 30000 TCP/RTP/AVP 96
+			// m=audio 50000 TCP/RTP/AVP 8
 			parts := strings.Fields(line[2:])
 			if len(parts) < 3 {
 				continue
@@ -69,6 +72,14 @@ func ParseSDP(s string) (*SDPInfo, error) {
 				}
 			} else if strings.Contains(parts[0], "audio") {
 				info.AudioPort = port
+				if strings.Contains(proto, "TCP") {
+					info.IsTCP = true
+				}
+				if len(parts) >= 4 {
+					if pt, err := strconv.Atoi(parts[3]); err == nil {
+						info.AudioPayload = pt
+					}
+				}
 			}
 		case strings.HasPrefix(line, "a="):
 			al := strings.ToLower(line[2:])
@@ -78,6 +89,12 @@ func ParseSDP(s string) (*SDPInfo, error) {
 				} else if strings.Contains(al, "active") {
 					info.TCPMode = "active"
 				}
+			} else if strings.HasPrefix(al, "sendrecv") {
+				info.Direction = "sendrecv"
+			} else if strings.HasPrefix(al, "recvonly") {
+				info.Direction = "recvonly"
+			} else if strings.HasPrefix(al, "sendonly") {
+				info.Direction = "sendonly"
 			}
 		case strings.HasPrefix(line, "y="):
 			info.SSRC = strings.TrimSpace(line[2:])
@@ -86,10 +103,50 @@ func ParseSDP(s string) (*SDPInfo, error) {
 	if info.IP == "" {
 		return nil, fmt.Errorf("invalid sdp: missing c= connection IP")
 	}
-	if info.VideoPort == 0 {
-		return nil, fmt.Errorf("invalid sdp: m=video port is 0 (platform media server/ZLM failed to open RTP port)")
+	if info.VideoPort == 0 && info.AudioPort == 0 {
+		return nil, fmt.Errorf("invalid sdp: both video and audio ports are 0")
 	}
 	return info, nil
+}
+
+// BuildTalkAnswerSDP 构造国标语音对讲/广播 200 OK 中的 SDP
+func BuildTalkAnswerSDP(deviceID, channelID, localIP string, localPort int, ssrc string, recv *SDPInfo) string {
+	sessName := firstNonEmpty(recv.SessionName, "Talk")
+	proto := "RTP/AVP"
+	if recv.IsTCP {
+		proto = "TCP/RTP/AVP"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "v=0\r\n")
+	fmt.Fprintf(&b, "o=%s 0 0 IN IP4 %s\r\n", deviceID, localIP)
+	fmt.Fprintf(&b, "s=%s\r\n", sessName)
+	fmt.Fprintf(&b, "c=IN IP4 %s\r\n", localIP)
+	fmt.Fprintf(&b, "t=0 0\r\n")
+	fmt.Fprintf(&b, "m=audio %d %s 8\r\n", localPort, proto)
+	if recv.IsTCP {
+		if recv.TCPMode == "active" {
+			fmt.Fprintf(&b, "a=setup:passive\r\n")
+		} else {
+			fmt.Fprintf(&b, "a=setup:active\r\n")
+		}
+		fmt.Fprintf(&b, "a=connection:new\r\n")
+	}
+	// RFC 3264 协商媒体方向：广播下行 recvonly；若对端指定了方向则按标准反转或保持对讲 sendrecv
+	if strings.EqualFold(sessName, "broadcast") {
+		fmt.Fprintf(&b, "a=recvonly\r\n")
+	} else if recv.Direction == "recvonly" {
+		fmt.Fprintf(&b, "a=sendonly\r\n")
+	} else if recv.Direction == "sendonly" {
+		fmt.Fprintf(&b, "a=recvonly\r\n")
+	} else {
+		fmt.Fprintf(&b, "a=sendrecv\r\n")
+	}
+	fmt.Fprintf(&b, "a=rtpmap:8 PCMA/8000\r\n")
+	if ssrc != "" {
+		fmt.Fprintf(&b, "y=%s\r\n", ssrc)
+		fmt.Fprintf(&b, "f=\r\n")
+	}
+	return b.String()
 }
 
 // BuildAnswerSDP 构造设备 200 OK 中的 SDP（sendonly）。

@@ -22,6 +22,7 @@ type Device struct {
 	cfgMu sync.RWMutex
 	ua    *sip.UA
 	ms    *media.SessionManager
+	tm    *media.TalkManager
 
 	sn        int32
 	kaFail    int32
@@ -91,6 +92,7 @@ func New(cfg *config.Config) *Device {
 	d.ms.OnComplete = func(ch, callID string) {
 		_ = d.SendMediaStatusNotify(ch, "121")
 	}
+	d.tm = media.NewTalkManager(cfg.SIP.LocalIP)
 	return d
 }
 
@@ -128,6 +130,7 @@ func (d *Device) Stop() {
 	}
 	close(d.stopCh)
 	d.ms.StopAll()
+	d.tm.StopAll()
 
 	// 优雅注销：Best-effort，最多等 1 秒；网络异常或无响应时直接超时退出
 	if d.ua != nil && d.ua.IsRegistered() {
@@ -176,23 +179,26 @@ func (d *Device) Status() Status {
 	transport := d.cfg.SIP.Transport
 	d.cfgRUnlock()
 
+	talkSessions := d.tm.ListSessions()
+
 	up := int64(0)
 	if !d.startedAt.IsZero() {
 		up = int64(time.Since(d.startedAt).Seconds())
 	}
 	return Status{
-		Registered:  d.ua.IsRegistered(),
-		DeviceID:    deviceID,
-		DeviceName:  deviceName,
-		Server:      server,
-		Local:       local,
-		Transport:   transport,
-		MediaMode:   mode,
-		MediaSource: src,
-		Channels:    chs,
-		Sessions:    sessions,
-		UptimeSec:   up,
-		StartedAt:   d.startedAt,
+		Registered:   d.ua.IsRegistered(),
+		DeviceID:     deviceID,
+		DeviceName:   deviceName,
+		Server:       server,
+		Local:        local,
+		Transport:    transport,
+		MediaMode:    mode,
+		MediaSource:  src,
+		Channels:     chs,
+		Sessions:     sessions,
+		TalkSessions: talkSessions,
+		UptimeSec:    up,
+		StartedAt:    d.startedAt,
 	}
 }
 
@@ -210,6 +216,11 @@ func (d *Device) KeepaliveNow() error {
 
 func (d *Device) StopSession(callID string) {
 	d.ms.StopByCallID(callID)
+	d.tm.StopByCallID(callID)
+}
+
+func (d *Device) TalkManager() *media.TalkManager {
+	return d.tm
 }
 
 // GetChannelPTZ 获取或初始化指定通道的虚拟云台控制器。
@@ -294,6 +305,9 @@ func (d *Device) registerLoop() {
 
 func (d *Device) keepaliveLoop() {
 	interval := time.Duration(d.cfg.SIP.KeepaliveInterval) * time.Second
+	if interval <= 0 {
+		interval = 60 * time.Second
+	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -452,6 +466,14 @@ func (d *Device) handleMANSCDP(root *gb28181.Root, m *sip.Message, src net.Addr)
 		d.respPresetQuery(root, m, src)
 	case "recordinfo":
 		d.respRecordInfo(root, m, src)
+	case "broadcast":
+		log.Printf("[gb] broadcast notify from=%s SourceID=%s TargetID=%s", src, root.SourceID, root.TargetID)
+		d.replyMANSCDP(root, m, src, map[string]any{
+			"CmdType":  "Broadcast",
+			"SN":       root.SN,
+			"DeviceID": d.cfg.Device.ID,
+			"Result":   "OK",
+		})
 	case "configdownload":
 		// 简单回复空
 		d.replyMANSCDP(root, m, src, map[string]any{
@@ -822,21 +844,39 @@ func (d *Device) onInvite(m *sip.Message, src net.Addr) {
 	callID := m.CallID()
 	sessName := strings.ToLower(recv.SessionName)
 	isPlayback := sessName == "playback" || sessName == "download"
+	isTalk := sessName == "talk" || sessName == "broadcast" || (recv.AudioPort > 0 && recv.VideoPort == 0)
 
-	log.Printf("[media] INVITE channel=%s s=%s media=%s:%d ssrc=%s t=%s %s",
-		channelID, recv.SessionName, recv.IP, recv.VideoPort, recv.SSRC, recv.StartTime, recv.EndTime)
+	log.Printf("[media] INVITE channel=%s s=%s media=%s:%d audioPort=%d ssrc=%s t=%s %s tcp=%v talk=%v\n[media] raw SDP:\n%s",
+		channelID, recv.SessionName, recv.IP, recv.VideoPort, recv.AudioPort, recv.SSRC, recv.StartTime, recv.EndTime, recv.IsTCP, isTalk, sdp)
 
 	var answer string
-	if isPlayback {
+	if isTalk {
+		streamType := "talk"
+		if strings.EqualFold(sessName, "broadcast") {
+			streamType = "broadcast"
+		}
+		talkSess, err := d.tm.StartTalkSession(channelID, callID, recv, streamType)
+		if err != nil {
+			log.Printf("[talk] start talk session failed: %v", err)
+			_ = d.ua.Reply(m, src, 500, "Internal Server Error", nil, "")
+			return
+		}
+		answer = media.BuildTalkAnswerSDP(d.cfg.Device.ID, channelID, d.cfg.SIP.LocalIP, talkSess.LocalPort, talkSess.SSRC, recv)
+	} else if isPlayback {
 		initOffset := d.calcPlaybackOffset(recv)
 		answer, err = d.ms.StartPlayback(channelID, callID, recv, initOffset)
+		if err != nil {
+			log.Printf("[media] start session failed: %v", err)
+			_ = d.ua.Reply(m, src, 500, "Internal Server Error", nil, "")
+			return
+		}
 	} else {
 		answer, err = d.ms.StartLive(channelID, callID, recv)
-	}
-	if err != nil {
-		log.Printf("[media] start session failed: %v", err)
-		_ = d.ua.Reply(m, src, 500, "Internal Server Error", nil, "")
-		return
+		if err != nil {
+			log.Printf("[media] start session failed: %v", err)
+			_ = d.ua.Reply(m, src, 500, "Internal Server Error", nil, "")
+			return
+		}
 	}
 
 	// 200 OK + SDP
@@ -862,9 +902,13 @@ func (d *Device) onInvite(m *sip.Message, src net.Addr) {
 
 	if err := d.ua.SendResponse(src, resp); err != nil {
 		log.Printf("[media] send INVITE 200 failed: %v", err)
-		d.ms.StopByCallID(callID)
+		if isTalk {
+			d.tm.StopByCallID(callID)
+		} else {
+			d.ms.StopByCallID(callID)
+		}
 	} else {
-		log.Printf("[media] INVITE 200 OK sent to %s ch=%s", src.String(), channelID)
+		log.Printf("[media] INVITE 200 OK sent to %s ch=%s (talk=%v)", src.String(), channelID, isTalk)
 	}
 }
 
@@ -872,6 +916,7 @@ func (d *Device) onBye(m *sip.Message, src net.Addr) {
 	callID := m.CallID()
 	log.Printf("[media] BYE callID=%s", callID)
 	d.ms.StopByCallID(callID)
+	d.tm.StopByCallID(callID)
 	_ = d.ua.Reply(m, src, 200, "OK", nil, "")
 }
 
