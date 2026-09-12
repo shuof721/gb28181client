@@ -556,77 +556,75 @@ func (d *Device) respRecordInfo(root *gb28181.Root, req *sip.Message, src net.Ad
 			break
 		}
 	}
+	recCfg := d.cfg.Record
+	nvrID := d.cfg.Device.ID
 	d.cfgRUnlock()
 
-	startTimeStr := query.StartTime
-	endTimeStr := query.EndTime
-	now := time.Now()
-	startTime := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	endTime := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, now.Location())
+	items := GenerateRecordItems(recCfg, channelID, channelName, nvrID, query.StartTime, query.EndTime, query.Type)
+	total := len(items)
 
-	if t, err := time.Parse("2006-01-02T15:04:05", startTimeStr); err == nil && !t.IsZero() {
-		startTime = t
-	}
-	if t, err := time.Parse("2006-01-02T15:04:05", endTimeStr); err == nil && !t.IsZero() {
-		endTime = t
-	}
-
-	// 动态生成录像切片列表：在起止时间范围内切成若个模拟录像段（每 2 小时一段）
-	items := make([]gb28181.RecordItem, 0)
-	step := 2 * time.Hour
-	cur := startTime
-	for cur.Before(endTime) {
-		segEnd := cur.Add(step)
-		if segEnd.After(endTime) {
-			segEnd = endTime
-		}
-		items = append(items, gb28181.RecordItem{
-			DeviceID:   channelID,
-			Name:       channelName,
-			FilePath:   fmt.Sprintf("/record/%s/%s_%s.mp4", cur.Format("20060102"), cur.Format("150405"), segEnd.Format("150405")),
-			Address:    "LocalDisk",
-			StartTime:  cur.Format("2006-01-02T15:04:05"),
-			EndTime:    segEnd.Format("2006-01-02T15:04:05"),
-			Secrecy:    0,
-			Type:       "time",
-			RecorderID: d.cfg.Device.ID,
-			FileSize:   "104857600",
+	const maxItemsPerPacket = 30
+	if total == 0 {
+		body := buildXMLResponse(map[string]any{
+			"CmdType":    "RecordInfo",
+			"SN":         root.SN,
+			"DeviceID":   channelID,
+			"Name":       channelName,
+			"SumNum":     0,
+			"RecordList": "  <RecordList Num=\"0\">\r\n  </RecordList>\r\n",
 		})
-		cur = segEnd
+		if _, err := d.ua.SendMessage(body, "Application/MANSCDP+xml"); err != nil {
+			log.Printf("[gb] recordinfo response (0 items) failed: %v", err)
+		} else {
+			log.Printf("[gb] recordinfo response sent ch=%s records=0", channelID)
+		}
+		return
 	}
 
-	var listB strings.Builder
-	fmt.Fprintf(&listB, "  <RecordList Num=\"%d\">\r\n", len(items))
-	for _, it := range items {
-		listB.WriteString("    <Item>\r\n")
-		fmt.Fprintf(&listB, "      <DeviceID>%s</DeviceID>\r\n", it.DeviceID)
-		fmt.Fprintf(&listB, "      <Name>%s</Name>\r\n", it.Name)
-		fmt.Fprintf(&listB, "      <FilePath>%s</FilePath>\r\n", it.FilePath)
-		fmt.Fprintf(&listB, "      <Address>%s</Address>\r\n", it.Address)
-		fmt.Fprintf(&listB, "      <StartTime>%s</StartTime>\r\n", it.StartTime)
-		fmt.Fprintf(&listB, "      <EndTime>%s</EndTime>\r\n", it.EndTime)
-		fmt.Fprintf(&listB, "      <Secrecy>%d</Secrecy>\r\n", it.Secrecy)
-		fmt.Fprintf(&listB, "      <Type>%s</Type>\r\n", it.Type)
-		fmt.Fprintf(&listB, "      <RecorderID>%s</RecorderID>\r\n", it.RecorderID)
-		fmt.Fprintf(&listB, "      <FileSize>%s</FileSize>\r\n", it.FileSize)
-		listB.WriteString("    </Item>\r\n")
-	}
-	listB.WriteString("  </RecordList>\r\n")
+	packetIdx := 0
+	for i := 0; i < total; i += maxItemsPerPacket {
+		end := i + maxItemsPerPacket
+		if end > total {
+			end = total
+		}
+		chunk := items[i:end]
+		packetIdx++
 
-	body := buildXMLResponse(map[string]any{
-		"CmdType":    "RecordInfo",
-		"SN":         root.SN,
-		"DeviceID":   channelID,
-		"Name":       channelName,
-		"SumNum":     len(items),
-		"RecordList": listB.String(),
-	})
-	_, err := d.ua.SendMessage(body, "Application/MANSCDP+xml")
-	if err != nil {
-		log.Printf("[gb] recordinfo response failed: %v", err)
-	} else {
-		log.Printf("[gb] recordinfo response sent ch=%s records=%d", channelID, len(items))
+		var listB strings.Builder
+		fmt.Fprintf(&listB, "  <RecordList Num=\"%d\">\r\n", len(chunk))
+		for _, it := range chunk {
+			listB.WriteString("    <Item>\r\n")
+			fmt.Fprintf(&listB, "      <DeviceID>%s</DeviceID>\r\n", it.DeviceID)
+			fmt.Fprintf(&listB, "      <Name>%s</Name>\r\n", it.Name)
+			fmt.Fprintf(&listB, "      <FilePath>%s</FilePath>\r\n", it.FilePath)
+			fmt.Fprintf(&listB, "      <Address>%s</Address>\r\n", it.Address)
+			fmt.Fprintf(&listB, "      <StartTime>%s</StartTime>\r\n", it.StartTime)
+			fmt.Fprintf(&listB, "      <EndTime>%s</EndTime>\r\n", it.EndTime)
+			fmt.Fprintf(&listB, "      <Secrecy>%d</Secrecy>\r\n", it.Secrecy)
+			fmt.Fprintf(&listB, "      <Type>%s</Type>\r\n", it.Type)
+			fmt.Fprintf(&listB, "      <RecorderID>%s</RecorderID>\r\n", it.RecorderID)
+			fmt.Fprintf(&listB, "      <FileSize>%s</FileSize>\r\n", it.FileSize)
+			listB.WriteString("    </Item>\r\n")
+		}
+		listB.WriteString("  </RecordList>\r\n")
+
+		body := buildXMLResponse(map[string]any{
+			"CmdType":    "RecordInfo",
+			"SN":         root.SN,
+			"DeviceID":   channelID,
+			"Name":       channelName,
+			"SumNum":     total,
+			"RecordList": listB.String(),
+		})
+
+		if _, err := d.ua.SendMessage(body, "Application/MANSCDP+xml"); err != nil {
+			log.Printf("[gb] recordinfo response packet %d failed: %v", packetIdx, err)
+		}
+		if end < total {
+			time.Sleep(15 * time.Millisecond) // 避免 UDP 连发丢包
+		}
 	}
+	log.Printf("[gb] recordinfo response sent ch=%s total=%d packets=%d", channelID, total, packetIdx)
 }
 
 func (d *Device) SendMediaStatusNotify(channelID, notifyType string) error {
@@ -759,21 +757,21 @@ func (d *Device) calcPlaybackOffset(recv *media.SDPInfo) float64 {
 	if recv.StartTime == "" || recv.StartTime == "0" {
 		return 0
 	}
-	st, err := strconv.ParseInt(recv.StartTime, 10, 64)
-	if err != nil || st <= 0 {
-		return 0
-	}
-	// 若为 Unix 秒级时间戳（例如 > 1_000_000_000）
-	if st > 1_000_000_000 {
-		now := time.Now()
-		dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-		// 模拟切片按 2 小时（7200 秒）一段
-		diff := st - dayStart.Unix()
-		if diff > 0 {
-			return float64(diff % 7200)
+	t, err := ParseFlexibleTime(recv.StartTime)
+	if err == nil && !t.IsZero() {
+		d.cfgRLock()
+		sliceMins := d.cfg.Record.SliceMinutes
+		d.cfgRUnlock()
+		if sliceMins <= 0 {
+			sliceMins = 60
 		}
-		return 0
+		sliceSec := int64(sliceMins * 60)
+		return float64(t.Unix() % sliceSec)
 	}
-	// 否则作为相对秒数
-	return float64(st)
+
+	st, err := strconv.ParseInt(recv.StartTime, 10, 64)
+	if err == nil && st > 0 {
+		return float64(st)
+	}
+	return 0
 }

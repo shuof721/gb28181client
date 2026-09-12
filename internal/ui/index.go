@@ -359,6 +359,12 @@ select{cursor:pointer}
   padding:8px 10px;background:var(--surface-2);border-radius:var(--radius-sm);
   margin-bottom:6px;border:1px solid var(--border);
 }
+
+/* Records Table */
+.rec-table{width:100%;border-collapse:collapse;font-size:12px;text-align:left}
+.rec-table th{background:var(--surface-3);color:var(--text-muted);font-weight:600;padding:8px 10px;border-bottom:1px solid var(--border)}
+.rec-table td{padding:8px 10px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:11px}
+.rec-table tr:hover td{background:rgba(255,255,255,0.03)}
 </style>
 </head>
 <body>
@@ -441,6 +447,7 @@ select{cursor:pointer}
         <button class="tab-btn active" onclick="switchWorkbenchTab('channels', this)">通道列表与视频源</button>
         <button class="tab-btn" onclick="switchWorkbenchTab('sessions', this)">实时点播会话</button>
         <button class="tab-btn" onclick="switchWorkbenchTab('logs', this)">设备运行日志</button>
+        <button class="tab-btn" onclick="switchWorkbenchTab('records', this)">虚拟录像排程与查询</button>
       </div>
     </div>
 
@@ -489,6 +496,39 @@ select{cursor:pointer}
       </div>
       <div class="log-box" id="logBox">
         <!-- Logs rendered here -->
+      </div>
+    </div>
+
+    <!-- Tab 4: Records -->
+    <div class="panel-body" id="tabRecords" style="display:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:10px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex:1">
+          <label style="font-size:12px;color:var(--text-muted)">通道:</label>
+          <select id="recFilterChannel" style="min-width:160px"></select>
+          <label style="font-size:12px;color:var(--text-muted)">起始时间:</label>
+          <input type="text" id="recFilterStart" placeholder="YYYY-MM-DD HH:mm:ss" style="width:160px"/>
+          <label style="font-size:12px;color:var(--text-muted)">结束时间:</label>
+          <input type="text" id="recFilterEnd" placeholder="YYYY-MM-DD HH:mm:ss" style="width:160px"/>
+          <label style="font-size:12px;color:var(--text-muted)">类型:</label>
+          <select id="recFilterType" style="width:90px">
+            <option value="all">全部 (all)</option>
+            <option value="time">定时 (time)</option>
+            <option value="alarm">报警 (alarm)</option>
+          </select>
+          <button class="btn btn-sm btn-primary" onclick="loadDeviceRecords()">检索录像</button>
+        </div>
+        <div>
+          <button class="btn btn-sm" onclick="openDeviceConfigModal(activeDeviceId, 'record')">⚙️ 修改录像排程配置</button>
+        </div>
+      </div>
+      <div id="recSummaryBar" style="margin-bottom:10px;font-size:12px;color:var(--text-muted);display:flex;gap:16px;align-items:center;padding:8px 12px;background:var(--surface-2);border-radius:var(--radius-sm);flex-wrap:wrap">
+        <span>当前排程模式: <b id="recSummaryMode" style="color:var(--text-main)">-</b></span>
+        <span>切片时长: <b id="recSummarySlice" style="color:var(--text-main)">-</b></span>
+        <span>历史保留: <b id="recSummaryRetain" style="color:var(--text-main)">-</b></span>
+        <span>检索结果: <b id="recSummaryCount" style="color:#6ee7b7">0 段</b></span>
+      </div>
+      <div id="recordListContainer" style="overflow-x:auto">
+        <!-- Records table rendered here -->
       </div>
     </div>
   </div>
@@ -578,6 +618,7 @@ select{cursor:pointer}
         <button class="tab-btn active" onclick="switchCfgTab('sip', this)">1. 平台 SIP 对接参数</button>
         <button class="tab-btn" onclick="switchCfgTab('device', this)">2. 设备国标身份</button>
         <button class="tab-btn" onclick="switchCfgTab('media', this)">3. 默认媒体参数</button>
+        <button class="tab-btn" onclick="switchCfgTab('record', this)">4. 虚拟录像排程</button>
       </div>
 
       <!-- Tab: SIP -->
@@ -721,6 +762,60 @@ select{cursor:pointer}
             <label class="form-label">媒体发送源地址 (Local IP)</label>
             <input type="text" id="cfgMediaLocalIp"/>
           </div>
+        </div>
+      </div>
+
+      <!-- Tab: Record -->
+      <div id="cfgTabRecord" class="cfg-tab-pane" style="display:none">
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label">虚拟录像功能开关</label>
+            <select id="cfgRecordEnabled">
+              <option value="true">启用虚拟录像 (响应 RecordInfo 查询)</option>
+              <option value="false">停用 (返回 0 条记录)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">录像排程模式 (Record Mode)</label>
+            <select id="cfgRecordMode">
+              <option value="continuous">全天连续录像 (24 小时全覆盖)</option>
+              <option value="work_hours">工作时段录像 (每日 08:00 ~ 18:00)</option>
+              <option value="alarm">报警录像 (整点随机报警模拟)</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label">切片时长 (Slice Minutes)</label>
+            <select id="cfgRecordSliceMinutes">
+              <option value="30">30 分钟 / 段</option>
+              <option value="60">60 分钟 / 段 (推荐)</option>
+              <option value="120">120 分钟 / 段 (2 小时)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">历史保留天数 (Retain Days)</label>
+            <input type="number" id="cfgRecordRetainDays" value="7" min="1" max="365"/>
+            <span style="font-size:11px;color:var(--text-dim)">超出保留天数的历史录像将自动模拟被覆盖清除</span>
+          </div>
+        </div>
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label">录像类型标识 (Type)</label>
+            <select id="cfgRecordType">
+              <option value="time">time (定时录像，通用标准)</option>
+              <option value="alarm">alarm (报警录像)</option>
+              <option value="all">all (全部录像)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">单段虚拟文件大小 (MB)</label>
+            <input type="number" id="cfgRecordFileSizeMB" value="100" min="1"/>
+            <span style="font-size:11px;color:var(--text-dim)">返回给平台的虚拟 FileSize (字节数 = MB * 1024 * 1024)</span>
+          </div>
+        </div>
+        <div style="margin-top:12px;padding:10px 14px;background:rgba(59,130,246,0.08);border-radius:var(--radius-sm);border:1px solid rgba(59,130,246,0.2);font-size:12px;color:var(--text-muted)">
+          💡 <b>提示：</b>保存后，国标平台（如 WVP、LiveGBS 等）通过 GB/T 28181 向该设备检索录像时，模拟器将根据此排程自动计算切片、按国标规范分页返回；发起历史录像回放 (INVITE Playback) 时亦按此排程对齐时间戳。
         </div>
       </div>
 
@@ -909,16 +1004,19 @@ function switchWorkbenchTab(tab, btn){
   document.getElementById('tabChannels').style.display = (tab==='channels' ? 'block' : 'none');
   document.getElementById('tabSessions').style.display = (tab==='sessions' ? 'block' : 'none');
   document.getElementById('tabLogs').style.display = (tab==='logs' ? 'block' : 'none');
+  document.getElementById('tabRecords').style.display = (tab==='records' ? 'block' : 'none');
   if(tab==='logs') loadLogs();
+  if(tab==='records') loadDeviceRecords();
 }
 
 // Switch Config Modal Tab
 function switchCfgTab(tab, btn){
   document.querySelectorAll('#deviceConfigModal .tab-btn').forEach(function(b){b.classList.remove('active')});
-  btn.classList.add('active');
+  if(btn) btn.classList.add('active');
   document.getElementById('cfgTabSip').style.display = (tab==='sip' ? 'block' : 'none');
   document.getElementById('cfgTabDevice').style.display = (tab==='device' ? 'block' : 'none');
   document.getElementById('cfgTabMedia').style.display = (tab==='media' ? 'block' : 'none');
+  document.getElementById('cfgTabRecord').style.display = (tab==='record' ? 'block' : 'none');
 }
 
 // Refresh Everything
@@ -1046,6 +1144,10 @@ async function loadActiveDeviceDetail(){
 
   renderChannels(devCfg.channels || [], prof.media || {}, st.sessions || []);
   renderSessions(st.sessions || []);
+  updateRecordChannelOptions(devCfg.channels || [], activeDeviceId);
+  if(document.getElementById('tabRecords').style.display !== 'none'){
+    loadDeviceRecords();
+  }
 }
 
 // Render Channels for active device
@@ -1164,14 +1266,123 @@ function renderVideoList(){
   }).join('');
 }
 
+// Records & Virtual Library
+function updateRecordChannelOptions(channels, devId){
+  const sel = document.getElementById('recFilterChannel');
+  if(!sel) return;
+  const currentVal = sel.value;
+  let opts = [];
+  if(channels && channels.length > 0){
+    opts = channels.map(function(c){
+      return '<option value="' + esc(c.id) + '">' + esc(c.name || c.id) + ' (' + esc(c.id) + ')</option>';
+    });
+  } else if(devId){
+    opts = ['<option value="' + esc(devId) + '">' + esc(devId) + ' (主设备)</option>'];
+  }
+  sel.innerHTML = opts.join('');
+  if(currentVal && opts.some(function(o){ return o.includes('value="' + currentVal + '"'); })){
+    sel.value = currentVal;
+  }
+}
+
+function initRecordFilterTimes(){
+  const startEl = document.getElementById('recFilterStart');
+  const endEl = document.getElementById('recFilterEnd');
+  if(startEl && !startEl.value){
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth()+1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    startEl.value = y + '-' + m + '-' + day + ' 00:00:00';
+  }
+  if(endEl && !endEl.value){
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth()+1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    endEl.value = y + '-' + m + '-' + day + ' 23:59:59';
+  }
+}
+
+async function loadDeviceRecords(){
+  if(!activeDeviceId) return;
+  initRecordFilterTimes();
+  const ch = document.getElementById('recFilterChannel').value;
+  const st = document.getElementById('recFilterStart').value.trim();
+  const et = document.getElementById('recFilterEnd').value.trim();
+  const typ = document.getElementById('recFilterType').value;
+
+  const q = new URLSearchParams();
+  if(ch) q.set('channel', ch);
+  if(st) q.set('start', st);
+  if(et) q.set('end', et);
+  if(typ) q.set('type', typ);
+
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/records?' + q.toString());
+  if(!j) return;
+
+  renderDeviceRecords(j);
+}
+
+function renderDeviceRecords(data){
+  const cfg = data.config || {};
+  const recs = data.records || [];
+
+  const modeLabels = {
+    'continuous': '全天连续录像 (24小时)',
+    'work_hours': '工作时段 (08:00~18:00)',
+    'alarm': '报警录像'
+  };
+
+  document.getElementById('recSummaryMode').textContent = (cfg.enabled === false) ? '已停用' : (modeLabels[cfg.mode] || cfg.mode || '全天连续');
+  document.getElementById('recSummarySlice').textContent = (cfg.slice_minutes || 60) + ' 分钟/段';
+  document.getElementById('recSummaryRetain').textContent = '最近 ' + (cfg.retain_days || 7) + ' 天';
+  document.getElementById('recSummaryCount').textContent = recs.length + ' 段录像';
+
+  const container = document.getElementById('recordListContainer');
+  if(!recs.length){
+    container.innerHTML = '<div style="color:var(--text-dim);padding:24px;text-align:center">当前时间范围与过滤条件下无匹配的录像切片（可能超出了保留天数、未在录像时间段内、或功能已停用）。</div>';
+    return;
+  }
+
+  let rows = recs.map(function(r, idx){
+    let sizeMb = (r.fileSize ? (r.fileSize / (1024*1024)).toFixed(1) : '100.0') + ' MB';
+    return '<tr>' +
+      '<td style="color:var(--text-dim)">' + (idx + 1) + '</td>' +
+      '<td style="color:var(--text-muted)">' + esc(r.deviceID) + '</td>' +
+      '<td style="color:#6ee7b7">' + esc(r.startTime) + '</td>' +
+      '<td style="color:#93c5fd">' + esc(r.endTime) + '</td>' +
+      '<td><span class="badge ' + (r.type==='alarm'?'off':'on') + '" style="font-size:10px">' + esc(r.type || 'time') + '</span></td>' +
+      '<td>' + esc(sizeMb) + '</td>' +
+      '<td style="color:var(--text-dim);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(r.filePath) + '">' + esc(r.filePath) + '</td>' +
+    '</tr>';
+  }).join('');
+
+  container.innerHTML = '<table class="rec-table">' +
+    '<thead>' +
+      '<tr>' +
+        '<th style="width:40px">#</th>' +
+        '<th>通道/设备ID</th>' +
+        '<th>起始时间 (StartTime)</th>' +
+        '<th>结束时间 (EndTime)</th>' +
+        '<th>类型 (Type)</th>' +
+        '<th>虚拟大小 (FileSize)</th>' +
+        '<th>切片路径 (FilePath)</th>' +
+      '</tr>' +
+    '</thead>' +
+    '<tbody>' + rows + '</tbody>' +
+  '</table>';
+}
+
 // Open Device Full Config Modal (自定义所有参数)
-async function openDeviceConfigModal(id){
+async function openDeviceConfigModal(id, defaultTab){
   const j = await api('/api/devices/' + encodeURIComponent(id));
   if(!j || !j.profile) return;
   const p = j.profile;
   const sip = p.sip || {};
   const dev = p.device || {};
   const media = p.media || {};
+  const rec = p.record || {};
 
   document.getElementById('cfgActiveDevId').value = id;
   document.getElementById('devCfgModalTitle').textContent = '自定义设备参数 · ' + (dev.name || id);
@@ -1207,7 +1418,19 @@ async function openDeviceConfigModal(id){
   document.getElementById('cfgMediaPayloadMax').value = media.rtp_payload_max || 1400;
   document.getElementById('cfgMediaLocalIp').value = media.local_ip || '';
 
+  // Record
+  document.getElementById('cfgRecordEnabled').value = (rec.enabled !== false) ? 'true' : 'false';
+  document.getElementById('cfgRecordMode').value = rec.mode || 'continuous';
+  document.getElementById('cfgRecordSliceMinutes').value = rec.slice_minutes || 60;
+  document.getElementById('cfgRecordRetainDays').value = rec.retain_days || 7;
+  document.getElementById('cfgRecordType').value = rec.record_type || 'time';
+  document.getElementById('cfgRecordFileSizeMB').value = rec.file_size_mb || 100;
+
   openModal('deviceConfigModal');
+  const targetTab = defaultTab || 'sip';
+  const tabIdx = {'sip': 1, 'device': 2, 'media': 3, 'record': 4}[targetTab] || 1;
+  const tabBtn = document.querySelector('#deviceConfigModal .tab-btn:nth-child(' + tabIdx + ')');
+  switchCfgTab(targetTab, tabBtn);
 }
 
 // Save Device Full Config
@@ -1245,6 +1468,15 @@ async function saveDeviceConfig(restart){
   p.media.fps = parseInt(document.getElementById('cfgMediaFps').value) || 25;
   p.media.rtp_payload_max = parseInt(document.getElementById('cfgMediaPayloadMax').value) || 1400;
   p.media.local_ip = document.getElementById('cfgMediaLocalIp').value.trim();
+
+  // Update Record
+  if(!p.record) p.record = {};
+  p.record.enabled = (document.getElementById('cfgRecordEnabled').value === 'true');
+  p.record.mode = document.getElementById('cfgRecordMode').value;
+  p.record.slice_minutes = parseInt(document.getElementById('cfgRecordSliceMinutes').value) || 60;
+  p.record.retain_days = parseInt(document.getElementById('cfgRecordRetainDays').value) || 7;
+  p.record.record_type = document.getElementById('cfgRecordType').value;
+  p.record.file_size_mb = parseInt(document.getElementById('cfgRecordFileSizeMB').value) || 100;
 
   const url = '/api/devices/' + encodeURIComponent(id) + (restart ? '?restart=true' : '');
   const j = await api(url, 'PUT', p);
@@ -1342,6 +1574,14 @@ async function submitCreateDevice(){
       fps: 25,
       width: 1280,
       height: 720
+    },
+    record: {
+      enabled: true,
+      mode: 'continuous',
+      slice_minutes: 60,
+      retain_days: 7,
+      record_type: 'time',
+      file_size_mb: 100
     }
   };
 

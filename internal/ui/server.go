@@ -154,6 +154,8 @@ func (s *Server) handleDeviceDispatch(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeErr(w, 404, "Not found")
 		}
+	case "records":
+		s.handleDeviceRecords(w, r, id)
 	default:
 		writeErr(w, 404, "Unknown device action")
 	}
@@ -440,6 +442,57 @@ func (s *Server) handleDeviceLogs(w http.ResponseWriter, r *http.Request, id str
 		lines = lines[len(lines)-n:]
 	}
 	writeJSON(w, 200, map[string]any{"lines": lines})
+}
+
+func (s *Server) handleDeviceRecords(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		writeErr(w, 405, "GET only")
+		return
+	}
+	md, err := s.mgr.Get(id)
+	if err != nil {
+		writeErr(w, 404, err.Error())
+		return
+	}
+
+	channelID := r.URL.Query().Get("channel")
+	if channelID == "" {
+		if len(md.Profile.Device.Channels) > 0 {
+			channelID = md.Profile.Device.Channels[0].ID
+		} else {
+			channelID = md.Profile.Device.ID
+		}
+	}
+	channelName := channelID
+	for _, ch := range md.Profile.Device.Channels {
+		if ch.ID == channelID {
+			channelName = ch.Name
+			break
+		}
+	}
+
+	startStr := r.URL.Query().Get("start")
+	endStr := r.URL.Query().Get("end")
+	queryType := r.URL.Query().Get("type")
+	if queryType == "" {
+		queryType = "all"
+	}
+
+	records := device.GenerateRecordItems(
+		md.Profile.Record,
+		channelID,
+		channelName,
+		md.Profile.Device.ID,
+		startStr,
+		endStr,
+		queryType,
+	)
+
+	writeJSON(w, 200, map[string]any{
+		"records": records,
+		"total":   len(records),
+		"config":  md.Profile.Record,
+	})
 }
 
 func (s *Server) handleChannelAdd(w http.ResponseWriter, r *http.Request, id string) {

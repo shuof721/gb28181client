@@ -72,5 +72,13 @@
     "fps": 25,
     "rtp_payload_max": 1400,
     "local_ip": "192.168.42.162"
+  },
+  "record": {
+    "enabled": true,
+    "mode": "continuous",
+    "slice_minutes": 60,
+    "retain_days": 7,
+    "record_type": "time",
+    "file_size_mb": 100
   }
 }

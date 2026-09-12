@@ -12,8 +12,19 @@ type Config struct {
 	SIP     SIPConfig     `yaml:"sip" json:"sip"`
 	Device  DeviceConfig  `yaml:"device" json:"device"`
 	Media   MediaConfig   `yaml:"media" json:"media"`
+	Record  RecordConfig  `yaml:"record" json:"record"`
 	Logging LoggingConfig `yaml:"logging" json:"logging"`
 	UI      UIConfig      `yaml:"ui" json:"ui"`
+}
+
+// RecordConfig 虚拟录像库参数配置。
+type RecordConfig struct {
+	Enabled      bool   `yaml:"enabled" json:"enabled"`             // 是否开启虚拟录像响应
+	Mode         string `yaml:"mode" json:"mode"`                   // continuous (全天连续) | work_hours (工作时段) | alarm (报警)
+	SliceMinutes int    `yaml:"slice_minutes" json:"slice_minutes"` // 切片时长 (分钟，默认 60)
+	RetainDays   int    `yaml:"retain_days" json:"retain_days"`     // 录像保留天数 (默认 7 天)
+	RecordType   string `yaml:"record_type" json:"record_type"`     // 默认录像类型: time | alarm | all
+	FileSizeMB   int    `yaml:"file_size_mb" json:"file_size_mb"`   // 模拟单切片大小 (MB，默认 100)
 }
 
 // DeviceProfile 单个模拟设备的持久化配置（JSON 存储）。
@@ -22,6 +33,7 @@ type DeviceProfile struct {
 	SIP     SIPConfig    `yaml:"sip" json:"sip"`
 	Device  DeviceConfig `yaml:"device" json:"device"`
 	Media   MediaConfig  `yaml:"media" json:"media"`
+	Record  RecordConfig `yaml:"record" json:"record"`
 }
 
 func (p *DeviceProfile) ToConfig() *Config {
@@ -29,6 +41,7 @@ func (p *DeviceProfile) ToConfig() *Config {
 		SIP:    p.SIP,
 		Device: p.Device,
 		Media:  p.Media,
+		Record: p.Record,
 	}
 	cfg.applyDefaults()
 	return cfg
@@ -39,6 +52,7 @@ func (p *DeviceProfile) ApplyDefaults() {
 	p.SIP = cfg.SIP
 	p.Device = cfg.Device
 	p.Media = cfg.Media
+	p.Record = cfg.Record
 }
 
 func (p *DeviceProfile) Validate() error {
@@ -241,6 +255,14 @@ func Default() *Config {
 			FPS:           25,
 			RTPPayloadMax: 1400,
 		},
+		Record: RecordConfig{
+			Enabled:      true,
+			Mode:         "continuous",
+			SliceMinutes: 60,
+			RetainDays:   7,
+			RecordType:   "time",
+			FileSizeMB:   100,
+		},
 		Logging: LoggingConfig{Level: "info"},
 		UI: UIConfig{
 			Enabled: true,
@@ -310,6 +332,21 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"
+	}
+	if c.Record.Mode == "" {
+		c.Record.Mode = "continuous"
+	}
+	if c.Record.SliceMinutes <= 0 {
+		c.Record.SliceMinutes = 60
+	}
+	if c.Record.RetainDays <= 0 {
+		c.Record.RetainDays = 7
+	}
+	if c.Record.RecordType == "" {
+		c.Record.RecordType = "time"
+	}
+	if c.Record.FileSizeMB <= 0 {
+		c.Record.FileSizeMB = 100
 	}
 	for i := range c.Device.Channels {
 		ch := &c.Device.Channels[i]
