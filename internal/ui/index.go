@@ -1444,11 +1444,82 @@ let talkSpeakerEnabled = false;
 let talkMicStream = null;
 let talkMicProcessor = null;
 let isTalkingMic = false;
+let talkFastPollTimer = null;
+let vuSmoothLevels = { rxVUBar: 0, txVUBar: 0 };
+
+function applyVULevel(barId, txtId, targetLvl){
+  const bar = document.getElementById(barId);
+  const txt = document.getElementById(txtId);
+  if(!bar) return;
+  targetLvl = Math.max(0, Math.min(100, targetLvl));
+
+  let current = vuSmoothLevels[barId] || 0;
+  if(targetLvl >= current){
+    current = targetLvl;
+  } else {
+    current = current * 0.72 + targetLvl * 0.28;
+    if(current < 0.5) current = 0;
+  }
+  vuSmoothLevels[barId] = current;
+
+  const rounded = Math.round(current);
+  bar.style.width = rounded + '%';
+
+  if(rounded < 50){
+    bar.style.background = 'linear-gradient(90deg, #10b981, #34d399)';
+    bar.style.boxShadow = 'none';
+  } else if(rounded < 80){
+    bar.style.background = 'linear-gradient(90deg, #10b981 0%, #f59e0b 100%)';
+    bar.style.boxShadow = 'none';
+  } else {
+    bar.style.background = 'linear-gradient(90deg, #f59e0b 0%, #ef4444 100%)';
+    bar.style.boxShadow = '0 0 10px rgba(239, 68, 68, 0.65)';
+  }
+
+  if(txt){
+    txt.textContent = rounded + '%';
+    if(rounded >= 80){
+      txt.style.color = '#f87171';
+    } else if(rounded >= 50){
+      txt.style.color = '#fbbf24';
+    } else {
+      txt.style.color = 'var(--text-main)';
+    }
+  }
+}
+
+function updateRxVUFromPCM(arrayBuffer){
+  if(!arrayBuffer || arrayBuffer.byteLength < 2) return;
+  const pcm16 = new Int16Array(arrayBuffer);
+  let sumSq = 0;
+  for(let i = 0; i < pcm16.length; i++){
+    sumSq += pcm16[i] * pcm16[i];
+  }
+  const rms = Math.sqrt(sumSq / pcm16.length);
+  if(rms < 12.0){
+    applyVULevel('rxVUBar', 'rxVUTxt', 0);
+    return;
+  }
+  const db = 20.0 * Math.log10(rms / 32768.0);
+  const minDB = -52.0;
+  const maxDB = -2.0;
+  let lvl = 0;
+  if(db > minDB){
+    lvl = ((db - minDB) / (maxDB - minDB)) * 100.0;
+    if(lvl > 100) lvl = 100;
+  }
+  applyVULevel('rxVUBar', 'rxVUTxt', lvl);
+}
 
 function renderTalkSessions(talkSessions){
   const container = document.getElementById('talkSessionContainer');
   if(!container) return;
   if(!talkSessions || !talkSessions.length){
+    if(talkFastPollTimer){
+      clearInterval(talkFastPollTimer);
+      talkFastPollTimer = null;
+    }
+    vuSmoothLevels = { rxVUBar: 0, txVUBar: 0 };
     if(talkWS){
       talkWS.close();
       talkWS = null;
@@ -1468,14 +1539,42 @@ function renderTalkSessions(talkSessions){
   }
 
   const s = talkSessions[0];
-  if(talkSpeakerEnabled && (!talkWS || talkWSSessionCallId !== s.callId)){
-    ensureTalkWS(s.callId);
+  ensureTalkWS(s.callId);
+
+  if(!talkFastPollTimer){
+    talkFastPollTimer = setInterval(function(){
+      if(activeDeviceId){
+        api('/api/devices/' + encodeURIComponent(activeDeviceId)).then(function(dev){
+          if(dev && dev.state && dev.state.talkSessions){
+            renderTalkSessions(dev.state.talkSessions);
+          }
+        });
+      }
+    }, 400);
+  }
+
+  const existingCard = document.getElementById('talkSessionCard');
+  if(existingCard &&
+     existingCard.getAttribute('data-call-id') === s.callId &&
+     existingCard.getAttribute('data-uplink-mode') === (s.uplinkMode || 'synthetic') &&
+     existingCard.getAttribute('data-speaker') === String(talkSpeakerEnabled)){
+    const rxPkts = document.getElementById('talkRxPackets');
+    if(rxPkts) rxPkts.textContent = '接收包数: ' + s.rxPackets + ' · 流量: ' + fmtSize(s.rxBytes);
+    const txPkts = document.getElementById('talkTxPackets');
+    if(txPkts) txPkts.textContent = '推流包数: ' + s.txPackets + ' · 流量: ' + fmtSize(s.txBytes);
+    if(!isTalkingMic){
+      applyVULevel('txVUBar', 'txVUTxt', s.txVolume || 0);
+    }
+    if(!talkWS || talkWS.readyState !== WebSocket.OPEN){
+      applyVULevel('rxVUBar', 'rxVUTxt', s.rxVolume || 0);
+    }
+    return;
   }
 
   const rxPct = Math.min(100, Math.max(0, s.rxVolume || 0));
   const txPct = Math.min(100, Math.max(0, s.txVolume || 0));
 
-  container.innerHTML = '<div style="background:linear-gradient(135deg, rgba(225,29,72,0.08) 0%, rgba(30,41,59,0.7) 100%);border:1px solid rgba(225,29,72,0.3);border-radius:10px;padding:16px;box-shadow:0 4px 20px rgba(0,0,0,0.3)">' +
+  container.innerHTML = '<div id="talkSessionCard" data-call-id="' + esc(s.callId) + '" data-uplink-mode="' + esc(s.uplinkMode || 'synthetic') + '" data-speaker="' + String(talkSpeakerEnabled) + '" style="background:linear-gradient(135deg, rgba(225,29,72,0.08) 0%, rgba(30,41,59,0.7) 100%);border:1px solid rgba(225,29,72,0.3);border-radius:10px;padding:16px;box-shadow:0 4px 20px rgba(0,0,0,0.3)">' +
     '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">' +
       '<div style="display:flex;align-items:center;gap:8px">' +
         '<span class="badge" style="background:#e11d48;color:#fff;font-size:11px;padding:2px 8px;font-weight:700"><span class="dot" style="background:#fff"></span>🎙️ ' + esc(s.streamType==='broadcast'?'语音广播中':'双向对讲中') + '</span>' +
@@ -1493,24 +1592,24 @@ function renderTalkSessions(talkSessions){
       '<div>' +
         '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-dim);margin-bottom:4px">' +
           '<span>下行平台收音 (平台 → 设备)</span>' +
-          '<span style="font-family:var(--font-mono)">' + Math.round(rxPct) + '%</span>' +
+          '<span id="rxVUTxt" style="font-family:var(--font-mono);font-weight:700">' + Math.round(rxPct) + '%</span>' +
         '</div>' +
-        '<div style="height:8px;background:#1e293b;border-radius:4px;overflow:hidden">' +
-          '<div style="width:' + rxPct + '%;height:100%;background:linear-gradient(90deg, #10b981, #f59e0b);transition:width 0.1s ease;border-radius:4px"></div>' +
+        '<div style="height:12px;background:#0b1120;border:1px solid rgba(255,255,255,0.08);border-radius:6px;overflow:hidden;padding:1px">' +
+          '<div id="rxVUBar" style="width:' + rxPct + '%;height:100%;background:linear-gradient(90deg, #10b981, #f59e0b);transition:width 0.08s ease-out, background 0.15s ease;border-radius:4px"></div>' +
         '</div>' +
-        '<div style="font-size:10px;font-family:var(--font-mono);color:var(--text-dim);margin-top:4px">' +
+        '<div id="talkRxPackets" style="font-size:10px;font-family:var(--font-mono);color:var(--text-dim);margin-top:4px">' +
           '接收包数: ' + s.rxPackets + ' · 流量: ' + fmtSize(s.rxBytes) +
         '</div>' +
       '</div>' +
       '<div>' +
         '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-dim);margin-bottom:4px">' +
           '<span>上行设备发音 (设备 → 平台)</span>' +
-          '<span style="font-family:var(--font-mono)">' + Math.round(txPct) + '%</span>' +
+          '<span id="txVUTxt" style="font-family:var(--font-mono);font-weight:700">' + Math.round(txPct) + '%</span>' +
         '</div>' +
-        '<div style="height:8px;background:#1e293b;border-radius:4px;overflow:hidden">' +
-          '<div style="width:' + txPct + '%;height:100%;background:linear-gradient(90deg, #3b82f6, #8b5cf6);transition:width 0.1s ease;border-radius:4px"></div>' +
+        '<div style="height:12px;background:#0b1120;border:1px solid rgba(255,255,255,0.08);border-radius:6px;overflow:hidden;padding:1px">' +
+          '<div id="txVUBar" style="width:' + txPct + '%;height:100%;background:linear-gradient(90deg, #3b82f6, #8b5cf6);transition:width 0.08s ease-out, background 0.15s ease;border-radius:4px"></div>' +
         '</div>' +
-        '<div style="font-size:10px;font-family:var(--font-mono);color:var(--text-dim);margin-top:4px">' +
+        '<div id="talkTxPackets" style="font-size:10px;font-family:var(--font-mono);color:var(--text-dim);margin-top:4px">' +
           '推流包数: ' + s.txPackets + ' · 流量: ' + fmtSize(s.txBytes) +
         '</div>' +
       '</div>' +
@@ -1550,7 +1649,10 @@ function ensureTalkWS(callId){
     talkWS.binaryType = 'arraybuffer';
     talkWS.onmessage = function(ev){
       if(ev.data instanceof ArrayBuffer){
-        playPCMFrames(ev.data);
+        if(talkSpeakerEnabled){
+          playPCMFrames(ev.data);
+        }
+        updateRxVUFromPCM(ev.data);
       }
     };
     talkWS.onclose = function(){ talkWS = null; };
@@ -1601,6 +1703,10 @@ function toggleTalkSpeaker(callId){
   refreshAll();
 }
 
+let talkMicFilter = null;
+let talkMicBuffer = [];
+let talkMicPhase = 0;
+
 async function startTalkMic(callId){
   isTalkingMic = true;
   const btn = document.getElementById('btnTalkMic');
@@ -1611,30 +1717,85 @@ async function startTalkMic(callId){
   try {
     ensureTalkWS(callId);
     if(!talkMicStream){
-      talkMicStream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 8000, channelCount: 1 } });
+      talkMicStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
     }
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const micSrc = ctx.createMediaStreamSource(talkMicStream);
-    const proc = ctx.createScriptProcessor(512, 1, 1);
+
+    // 硬件级抗混叠低通滤波器 (Anti-Aliasing Filter)：
+    // 切除 3400Hz 以上高频与杂音，彻底消除降采样至 8000Hz 时的混叠折叠失真与沙哑毛刺感
+    const lowpass = ctx.createBiquadFilter();
+    lowpass.type = 'lowpass';
+    lowpass.frequency.value = 3400;
+    lowpass.Q.value = 0.707;
+    micSrc.connect(lowpass);
+    talkMicFilter = lowpass;
+
+    // 采用 2048 样本缓冲区，减少音频线程上下文切换开销
+    const proc = ctx.createScriptProcessor(2048, 1, 1);
+    lowpass.connect(proc);
+    proc.connect(ctx.destination);
+    talkMicProcessor = proc;
+
+    talkMicBuffer = [];
+    talkMicPhase = 0;
+    const inRate = ctx.sampleRate;
+    const outRate = 8000;
+    const ratio = inRate / outRate;
+
     proc.onaudioprocess = function(e){
       if(!isTalkingMic) return;
       const input = e.inputBuffer.getChannelData(0);
-      const step = e.inputBuffer.sampleRate / 8000;
-      const outLen = Math.floor(input.length / step);
-      const pcm16 = new Int16Array(outLen);
-      for(let i = 0; i < outLen; i++){
-        let s = input[Math.floor(i * step)];
+
+      // 高保真线性插值重采样 (带相位累加，杜绝样本丢失与相位截断杂音)
+      while(talkMicPhase < input.length){
+        const i0 = Math.floor(talkMicPhase);
+        const i1 = Math.min(i0 + 1, input.length - 1);
+        const frac = talkMicPhase - i0;
+        let s = input[i0] * (1 - frac) + input[i1] * frac;
+
+        // 软动态余量 (0.92)，防止大声说话时突发 G.711 硬截断破音
+        s = s * 0.92;
         if(s < -1) s = -1;
         if(s > 1) s = 1;
-        pcm16[i] = s < 0 ? s * 32768 : s * 32767;
+        const v = Math.round(s < 0 ? s * 32768 : s * 32767);
+        talkMicBuffer.push(v);
+        talkMicPhase += ratio;
       }
-      if(talkWS && talkWS.readyState === WebSocket.OPEN){
-        talkWS.send(pcm16.buffer);
+      talkMicPhase -= input.length;
+
+      // 严格按 160 采样 (20ms/8000Hz 国标单帧标准) 切分成帧推送 WebSocket
+      while(talkMicBuffer.length >= 160){
+        const frame = talkMicBuffer.splice(0, 160);
+        const pcm16 = new Int16Array(frame);
+
+        // 实时音量计算驱动上行 VU 表
+        let sumSq = 0;
+        for(let j = 0; j < 160; j++){
+          sumSq += pcm16[j] * pcm16[j];
+        }
+        const rms = Math.sqrt(sumSq / 160);
+        let lvl = 0;
+        if(rms >= 12.0){
+          const db = 20.0 * Math.log10(rms / 32768.0);
+          if(db > -52.0){
+            lvl = Math.min(100, ((db + 52.0) / 50.0) * 100.0);
+          }
+        }
+        applyVULevel('txVUBar', 'txVUTxt', Math.round(lvl));
+
+        if(talkWS && talkWS.readyState === WebSocket.OPEN){
+          talkWS.send(pcm16.buffer);
+        }
       }
     };
-    micSrc.connect(proc);
-    proc.connect(ctx.destination);
-    talkMicProcessor = proc;
   } catch(err){
     console.error('mic error:', err);
     showToast('无法启用麦克风: ' + err.message, 'error');
@@ -1652,6 +1813,22 @@ function stopTalkMic(){
     talkMicProcessor.disconnect();
     talkMicProcessor = null;
   }
+  if(talkMicFilter){
+    talkMicFilter.disconnect();
+    talkMicFilter = null;
+  }
+  if(talkMicBuffer && talkMicBuffer.length > 0){
+    const frame = new Int16Array(160);
+    for(let i = 0; i < talkMicBuffer.length; i++){
+      frame[i] = talkMicBuffer[i];
+    }
+    talkMicBuffer = [];
+    if(talkWS && talkWS.readyState === WebSocket.OPEN){
+      talkWS.send(frame.buffer);
+    }
+  }
+  talkMicPhase = 0;
+  applyVULevel('txVUBar', 'txVUTxt', 0);
 }
 
 async function setTalkUplinkMode(callId, mode){
@@ -1666,6 +1843,10 @@ async function stopTalkSession(callId){
   const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/talk/stop?callId=' + encodeURIComponent(callId), 'POST');
   if(j && j.ok){
     showToast('对讲会话已终止', 'info');
+    if(talkFastPollTimer){
+      clearInterval(talkFastPollTimer);
+      talkFastPollTimer = null;
+    }
     if(talkWS) talkWS.close();
     talkSpeakerEnabled = false;
     stopTalkMic();

@@ -67,8 +67,9 @@ type TalkSession struct {
 	listenersMu sync.RWMutex
 	listeners   map[chan []byte]struct{}
 
-	// 来自前端麦克风的上行音频缓冲 (PCM16 字节流, 8000Hz 16bit 单声道)
-	micInCh chan []int16
+	// 来自前端麦克风的上行音频连续样本缓冲池 (PCM16, 8000Hz 16bit 单声道)
+	micMu  sync.Mutex
+	micBuf []int16
 
 	stopCh  chan struct{}
 	stopped atomic.Bool
@@ -78,7 +79,20 @@ type TalkSession struct {
 }
 
 func (s *TalkSession) setRxVol(v float64) {
-	s.rxVolBits.Store(math.Float64bits(v))
+	oldBits := s.rxVolBits.Load()
+	oldVal := math.Float64frombits(oldBits)
+	var newVal float64
+	if v >= oldVal {
+		// 快速上升 (Fast Attack)：声音产生时瞬间响应跳起
+		newVal = v
+	} else {
+		// 平滑释放 (Smooth Release)：避免音节间瞬时跌零，提供专业音频 VU 表阻尼手感
+		newVal = oldVal*0.80 + v*0.20
+		if newVal < 0.5 {
+			newVal = 0
+		}
+	}
+	s.rxVolBits.Store(math.Float64bits(newVal))
 }
 
 func (s *TalkSession) GetRxVol() float64 {
@@ -86,7 +100,18 @@ func (s *TalkSession) GetRxVol() float64 {
 }
 
 func (s *TalkSession) setTxVol(v float64) {
-	s.txVolBits.Store(math.Float64bits(v))
+	oldBits := s.txVolBits.Load()
+	oldVal := math.Float64frombits(oldBits)
+	var newVal float64
+	if v >= oldVal {
+		newVal = v
+	} else {
+		newVal = oldVal*0.80 + v*0.20
+		if newVal < 0.5 {
+			newVal = 0
+		}
+	}
+	s.txVolBits.Store(math.Float64bits(newVal))
 }
 
 func (s *TalkSession) GetTxVol() float64 {
@@ -121,16 +146,25 @@ func (s *TalkSession) UnregisterListener(ch chan []byte) {
 	s.listenersMu.Unlock()
 }
 
-// PushMicPCM 写入来自前端麦克风的 PCM16 采样
+// PushMicPCM 写入来自前端麦克风的 PCM16 采样至连续 FIFO 缓冲池
 func (s *TalkSession) PushMicPCM(samples []int16) {
-	if s.stopped.Load() {
+	if s.stopped.Load() || len(samples) == 0 {
 		return
 	}
-	select {
-	case s.micInCh <- samples:
-	default:
-		// 缓冲满时丢弃最旧帧，防止延迟累积
+	s.micMu.Lock()
+	defer s.micMu.Unlock()
+
+	// 限制缓冲池最大堆积量 (最多 8000 个采样 = 1.0 秒)，防止延迟累积
+	const maxBuf = 8000
+	if len(s.micBuf)+len(samples) > maxBuf {
+		overflow := (len(s.micBuf) + len(samples)) - maxBuf
+		if overflow < len(s.micBuf) {
+			s.micBuf = s.micBuf[overflow:]
+		} else {
+			s.micBuf = nil
+		}
 	}
+	s.micBuf = append(s.micBuf, samples...)
 }
 
 func (s *TalkSession) Info() TalkSessionInfo {
@@ -363,25 +397,22 @@ func (s *TalkSession) txLoop() {
 		var pcm []int16
 
 		if mode == "mic" {
-			// 从麦克风输入队列读取
-			select {
-			case samples := <-s.micInCh:
-				pcm = samples
-			default:
-				// 无麦克风输入时发送静音帧维持心跳与推流
+			s.micMu.Lock()
+			if len(s.micBuf) >= 160 {
+				pcm = make([]int16, 160)
+				copy(pcm, s.micBuf[:160])
+				s.micBuf = s.micBuf[160:]
+			} else if len(s.micBuf) > 0 {
+				pcm = make([]int16, 160)
+				copy(pcm, s.micBuf)
+				s.micBuf = nil
+			} else {
 				pcm = make([]int16, 160)
 			}
+			s.micMu.Unlock()
 		} else {
 			// 内置对讲模拟提示音
 			pcm = beepGen.NextFrame()
-		}
-
-		if len(pcm) > 160 {
-			pcm = pcm[:160]
-		} else if len(pcm) < 160 {
-			padded := make([]int16, 160)
-			copy(padded, pcm)
-			pcm = padded
 		}
 
 		// 计算并记录上行音量
@@ -496,7 +527,6 @@ func (tm *TalkManager) StartTalkSession(channelID, callID string, recv *SDPInfo,
 		raddr:      &net.UDPAddr{IP: net.ParseIP(recv.IP), Port: remotePort},
 		startTime:  time.Now(),
 		listeners:  make(map[chan []byte]struct{}),
-		micInCh:    make(chan []int16, 20),
 		stopCh:     make(chan struct{}),
 	}
 	s.uplinkMode.Store(&defaultMode)

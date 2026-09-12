@@ -149,6 +149,32 @@ func BuildTalkAnswerSDP(deviceID, channelID, localIP string, localPort int, ssrc
 	return b.String()
 }
 
+// BuildBroadcastOfferSDP 构造国标语音广播设备主动向平台发起的 INVITE 中的 SDP (recvonly)
+func BuildBroadcastOfferSDP(targetID, localIP string, localPort int, ssrc string, isTCP bool) string {
+	proto := "RTP/AVP"
+	if isTCP {
+		proto = "TCP/RTP/AVP"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "v=0\r\n")
+	fmt.Fprintf(&b, "o=%s 0 0 IN IP4 %s\r\n", targetID, localIP)
+	fmt.Fprintf(&b, "s=Broadcast\r\n")
+	fmt.Fprintf(&b, "c=IN IP4 %s\r\n", localIP)
+	fmt.Fprintf(&b, "t=0 0\r\n")
+	fmt.Fprintf(&b, "m=audio %d %s 8\r\n", localPort, proto)
+	if isTCP {
+		fmt.Fprintf(&b, "a=setup:active\r\n")
+		fmt.Fprintf(&b, "a=connection:new\r\n")
+	}
+	fmt.Fprintf(&b, "a=recvonly\r\n")
+	fmt.Fprintf(&b, "a=rtpmap:8 PCMA/8000\r\n")
+	if ssrc != "" {
+		fmt.Fprintf(&b, "y=%s\r\n", ssrc)
+		fmt.Fprintf(&b, "f=v/////a/1/8/1\r\n")
+	}
+	return b.String()
+}
+
 // BuildAnswerSDP 构造设备 200 OK 中的 SDP（sendonly）。
 func BuildAnswerSDP(deviceID, channelID, localIP string, ssrc string, recv *SDPInfo) string {
 	sessName := firstNonEmpty(recv.SessionName, "Play")

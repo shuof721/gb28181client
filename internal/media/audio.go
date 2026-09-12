@@ -179,7 +179,9 @@ func ULawToPCM16(ulaw []byte) []int16 {
 	return out
 }
 
-// CalculateRMSLevel 计算 PCM16 音频帧的电平（0.0 ~ 100.0），供前端 VU 表绘制
+// CalculateRMSLevel 计算 PCM16 音频帧的人耳感知电平（0.0 ~ 100.0），供前端 VU 表绘制
+// 采用声学工程标准的对数分贝 dBFS 标度映射（-52 dBFS ~ -2 dBFS -> 0% ~ 100%），
+// 并结合底噪门限截断，使对讲普通人声、喊话及提示音的跳动幅度鲜明灵敏。
 func CalculateRMSLevel(pcm []int16) float64 {
 	if len(pcm) == 0 {
 		return 0
@@ -190,11 +192,24 @@ func CalculateRMSLevel(pcm []int16) float64 {
 		sumSquares += f * f
 	}
 	rms := math.Sqrt(sumSquares / float64(len(pcm)))
-	// 归一化到 0 ~ 100，使用适度增益平滑展示
-	level := (rms / 32768.0) * 100.0 * 2.5
-	if level > 100.0 {
-		level = 100.0
+	if rms < 12.0 {
+		return 0
 	}
+
+	// 转换为相对于满量程 (32768) 的分贝值 dBFS
+	db := 20.0 * math.Log10(rms/32768.0)
+
+	// 人声对讲动态范围：-52 dBFS (极轻微背景声) 到 -2 dBFS (近场满载)
+	const minDB = -52.0
+	const maxDB = -2.0
+	if db <= minDB {
+		return 0
+	}
+	if db >= maxDB {
+		return 100
+	}
+
+	level := ((db - minDB) / (maxDB - minDB)) * 100.0
 	return math.Round(level*10) / 10
 }
 

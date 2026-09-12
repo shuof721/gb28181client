@@ -468,12 +468,14 @@ func (d *Device) handleMANSCDP(root *gb28181.Root, m *sip.Message, src net.Addr)
 		d.respRecordInfo(root, m, src)
 	case "broadcast":
 		log.Printf("[gb] broadcast notify from=%s SourceID=%s TargetID=%s", src, root.SourceID, root.TargetID)
-		d.replyMANSCDP(root, m, src, map[string]any{
+		go d.replyMANSCDP(root, m, src, map[string]any{
 			"CmdType":  "Broadcast",
 			"SN":       root.SN,
 			"DeviceID": d.cfg.Device.ID,
 			"Result":   "OK",
 		})
+		// 国标 4.3.4 规范：收到 Broadcast Notify 并回复 200 OK 后，设备作为 UAC 主动向平台发起 INVITE
+		go d.startBroadcastInvite(root.SourceID, root.TargetID)
 	case "configdownload":
 		// 简单回复空
 		d.replyMANSCDP(root, m, src, map[string]any{
@@ -983,4 +985,131 @@ func (d *Device) calcPlaybackOffset(recv *media.SDPInfo) float64 {
 		return float64(st)
 	}
 	return 0
+}
+
+// startBroadcastInvite 国标语音广播：收到平台 Notify 后，设备作为 UAC 主动向平台发起 INVITE
+func (d *Device) startBroadcastInvite(sourceID, targetID string) {
+	d.cfgRLock()
+	serverIP := d.cfg.SIP.ServerIP
+	serverPort := d.cfg.SIP.ServerPort
+	localIP := d.cfg.SIP.LocalIP
+	transport := d.cfg.SIP.Transport
+	devID := d.cfg.Device.ID
+	domain := d.cfg.Device.Domain
+	d.cfgRUnlock()
+
+	if sourceID == "" {
+		sourceID = domain + "2000000001"
+		if len(sourceID) != 20 {
+			sourceID = devID
+		}
+	}
+	if targetID == "" {
+		d.cfgRLock()
+		if len(d.cfg.Device.Channels) > 0 {
+			targetID = d.cfg.Device.Channels[0].ID
+		} else {
+			targetID = devID
+		}
+		d.cfgRUnlock()
+	}
+
+	callID := fmt.Sprintf("%s@%s", sip.RandomToken(12), localIP)
+	isTCP := strings.EqualFold(transport, "tcp")
+	ssrc := fmt.Sprintf("1%09d", time.Now().Unix()%1000000000)
+
+	localPort := 51000
+	c, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(localIP), Port: 0})
+	if err == nil {
+		localPort = c.LocalAddr().(*net.UDPAddr).Port
+		_ = c.Close()
+	}
+
+	sdp := media.BuildBroadcastOfferSDP(targetID, localIP, localPort, ssrc, isTCP)
+	requestURI := fmt.Sprintf("sip:%s@%s:%d", sourceID, serverIP, serverPort)
+
+	log.Printf("[broadcast] initiating outgoing INVITE to %s ch=%s callID=%s tcp=%v\n[broadcast] offer SDP:\n%s",
+		requestURI, targetID, callID, isTCP, sdp)
+
+	sentReq, resp, err := d.ua.Invite(requestURI, func(req *sip.Message) {
+		fromTag := sip.RandomToken(6)
+		req.SetHeader("From", fmt.Sprintf("<sip:%s@%s>;tag=%s", targetID, serverIP, fromTag))
+		req.SetHeader("To", fmt.Sprintf("<sip:%s@%s>", sourceID, serverIP))
+		req.SetHeader("Call-ID", callID)
+		req.SetHeader("Subject", fmt.Sprintf("%s:0,%s:0", targetID, sourceID))
+		if isTCP {
+			req.SetHeader("Contact", fmt.Sprintf("<sip:%s@%s:%d;transport=tcp>", targetID, localIP, d.cfg.SIP.LocalPort))
+		} else {
+			req.SetHeader("Contact", fmt.Sprintf("<sip:%s@%s:%d>", targetID, localIP, d.cfg.SIP.LocalPort))
+		}
+	}, []byte(sdp), "Application/SDP")
+
+	if err != nil {
+		log.Printf("[broadcast] outgoing INVITE to %s failed: %v", requestURI, err)
+		return
+	}
+	if resp == nil || resp.StatusCode != 200 {
+		status := 0
+		reason := "unknown"
+		if resp != nil {
+			status = resp.StatusCode
+			reason = resp.Reason
+		}
+		log.Printf("[broadcast] platform rejected outgoing INVITE status=%d reason=%s", status, reason)
+		return
+	}
+
+	log.Printf("[broadcast] platform accepted INVITE 200 OK (Call-ID: %s), sending ACK\n[broadcast] answer SDP:\n%s",
+		callID, string(resp.Body))
+	if err := d.ua.SendACK(sentReq, resp); err != nil {
+		log.Printf("[broadcast] send ACK failed: %v", err)
+	}
+
+	platformSDP, err := media.ParseSDP(string(resp.Body))
+	if err != nil {
+		log.Printf("[broadcast] parse platform SDP error: %v", err)
+		return
+	}
+
+	log.Printf("[broadcast] starting broadcast audio session ch=%s platformMedia=%s:%d ssrc=%s tcp=%v",
+		targetID, platformSDP.IP, platformSDP.AudioPort, platformSDP.SSRC, platformSDP.IsTCP)
+
+	_, err = d.tm.StartTalkSession(targetID, callID, platformSDP, "broadcast")
+	if err != nil {
+		log.Printf("[broadcast] start broadcast talk session failed: %v", err)
+		return
+	}
+	log.Printf("[broadcast] broadcast active! Channel %s is now listening to platform shout", targetID)
+}
+
+// StopTalk 停止指定 Call-ID 的对讲/广播会话；若为主叫发起的广播会话，则向平台发送 BYE
+func (d *Device) StopTalk(callID string) {
+	sess := d.tm.GetSession(callID)
+	if sess != nil {
+		if strings.EqualFold(sess.StreamType, "broadcast") {
+			d.cfgRLock()
+			serverIP := d.cfg.SIP.ServerIP
+			serverPort := d.cfg.SIP.ServerPort
+			domain := d.cfg.Device.Domain
+			devID := d.cfg.Device.ID
+			d.cfgRUnlock()
+
+			sourceID := domain + "2000000001"
+			if len(sourceID) != 20 {
+				sourceID = devID
+			}
+			requestURI := fmt.Sprintf("sip:%s@%s:%d", sourceID, serverIP, serverPort)
+			from := fmt.Sprintf("<sip:%s@%s>", sess.ChannelID, serverIP)
+			to := fmt.Sprintf("<sip:%s@%s>", sourceID, serverIP)
+			_ = d.ua.SendBYE(requestURI, from, to, callID)
+		}
+		sess.Stop()
+	}
+}
+
+// StopAllTalk 停止该设备名下的全部对讲/广播会话
+func (d *Device) StopAllTalk() {
+	for _, info := range d.tm.ListSessions() {
+		d.StopTalk(info.CallID)
+	}
 }

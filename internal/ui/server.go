@@ -470,9 +470,9 @@ func (s *Server) handleDeviceTalkStop(w http.ResponseWriter, r *http.Request, id
 	}
 	callID := r.URL.Query().Get("callId")
 	if callID != "" {
-		dev.TalkManager().StopByCallID(callID)
+		dev.StopTalk(callID)
 	} else {
-		dev.TalkManager().StopAll()
+		dev.StopAllTalk()
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }

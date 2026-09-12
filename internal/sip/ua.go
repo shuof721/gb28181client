@@ -308,6 +308,67 @@ func (ua *UA) Reply(req *Message, src net.Addr, code int, reason string, body []
 	return ua.SendResponse(src, resp)
 }
 
+// Invite 发送 INVITE 请求并等待最终响应 (200 OK)，返回最终发送的 inviteReq、应答 resp200 与可能错误
+func (ua *UA) Invite(requestURI string, extra func(*Message), body []byte, contentType string) (*Message, *Message, error) {
+	var sentReq *Message
+	wrappedExtra := func(req *Message) {
+		if extra != nil {
+			extra(req)
+		}
+		sentReq = req
+	}
+	resp, err := ua.Request("INVITE", requestURI, wrappedExtra, body, contentType)
+	if err != nil {
+		return nil, nil, err
+	}
+	return sentReq, resp, nil
+}
+
+// SendACK 向对端发送 INVITE 对应的 ACK 确认
+func (ua *UA) SendACK(inviteReq *Message, resp200 *Message) error {
+	ack := NewRequest("ACK", inviteReq.RequestURI)
+	if contact := resp200.GetHeader("Contact"); contact != "" {
+		uri := strings.Trim(contact, "<>")
+		if idx := strings.Index(uri, ">"); idx != -1 {
+			uri = uri[:idx]
+		}
+		if uri != "" {
+			ack.RequestURI = uri
+		}
+	}
+	via := fmt.Sprintf("SIP/2.0/%s %s;rport;branch=z9hG4bK%s",
+		strings.ToUpper(ua.Transport), ua.localHostPort(), RandomToken(8))
+	ack.SetHeader("Via", via)
+	ack.SetHeader("From", inviteReq.GetHeader("From"))
+	ack.SetHeader("To", resp200.GetHeader("To")) // 必须带上服务端 200 OK 返回的 To tag
+	ack.SetHeader("Call-ID", inviteReq.CallID())
+	cseq := inviteReq.GetHeader("CSeq")
+	cseqParts := strings.Fields(cseq)
+	if len(cseqParts) >= 1 {
+		ack.SetHeader("CSeq", cseqParts[0]+" ACK")
+	} else {
+		ack.SetHeader("CSeq", "1 ACK")
+	}
+	ack.SetHeader("Max-Forwards", "70")
+	ack.SetHeader("User-Agent", ua.UserAgent)
+	return ua.send(ua.serverAddr(), ack.Bytes())
+}
+
+// SendBYE 向对端发送 BYE 请求以挂断会话
+func (ua *UA) SendBYE(requestURI, from, to, callID string) error {
+	req := NewRequest("BYE", requestURI)
+	via := fmt.Sprintf("SIP/2.0/%s %s;rport;branch=z9hG4bK%s",
+		strings.ToUpper(ua.Transport), ua.localHostPort(), RandomToken(8))
+	req.SetHeader("Via", via)
+	req.SetHeader("From", from)
+	req.SetHeader("To", to)
+	req.SetHeader("Call-ID", callID)
+	req.SetHeader("CSeq", fmt.Sprintf("%d BYE", ua.nextCSeq()))
+	req.SetHeader("Max-Forwards", "70")
+	req.SetHeader("User-Agent", ua.UserAgent)
+	return ua.send(ua.serverAddr(), req.Bytes())
+}
+
 // ===== 注册流程 =====
 
 func (ua *UA) Register(expires int) error {
