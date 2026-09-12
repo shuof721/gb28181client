@@ -3,10 +3,10 @@
 
 sip:
   # 平台 SIP 地址（改成你 WVP 所在机器 IP）
-  server_ip: "192.168.42.162"
+  server_ip: "192.168.42.198"
   server_port: 8116
   # 本机 SIP 监听（平台需能访问到此地址）
-  local_ip: "192.168.42.162"
+  local_ip: "192.168.42.198"
   local_port: 5070
   transport: "tcp"          # udp | tcp
   username: "34020000001180000001"   # 通常等于设备国标编号
@@ -69,7 +69,7 @@ media:
   fps: 25
   rtp_payload_max: 1400
   # 发送 RTP 的源地址，默认同 sip.local_ip
-  # local_ip: "192.168.42.162"
+  # local_ip: "192.168.42.198"
 
 logging:
   level: "info"

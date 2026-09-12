@@ -117,7 +117,10 @@ func (m *mock) onRegister(msg *sip.Message, src net.Addr) {
 		time.Sleep(200 * time.Millisecond)
 		dst := m.devContact
 		m.sendCatalogQuery(dst, m.devID)
+		time.Sleep(200 * time.Millisecond)
 		m.sendDeviceInfoQuery(dst, m.devID)
+		time.Sleep(200 * time.Millisecond)
+		m.sendPresetQuery(dst, m.devID)
 		if m.inviteCh != "" {
 			time.Sleep(500 * time.Millisecond)
 			m.sendInvite(dst, m.inviteCh)
@@ -159,6 +162,16 @@ func (m *mock) sendDeviceInfoQuery(dst, deviceID string) {
 	body := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <Query>
   <CmdType>DeviceInfo</CmdType>
+  <SN>%s</SN>
+  <DeviceID>%s</DeviceID>
+</Query>`, m.nextSN(), deviceID)
+	m.sendMessage(dst, body, deviceID)
+}
+
+func (m *mock) sendPresetQuery(dst, deviceID string) {
+	body := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<Query>
+  <CmdType>PresetQuery</CmdType>
   <SN>%s</SN>
   <DeviceID>%s</DeviceID>
 </Query>`, m.nextSN(), deviceID)

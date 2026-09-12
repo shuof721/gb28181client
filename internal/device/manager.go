@@ -159,25 +159,28 @@ func (m *Manager) Start(id string) error {
 // Stop 停止指定设备。
 func (m *Manager) Stop(id string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	id = config.NormalizeGBID(id)
 	md, ok := m.devs[id]
 	if !ok {
+		m.mu.Unlock()
 		return fmt.Errorf("device not found: %s", id)
 	}
 	if !md.Running || md.Dev == nil {
 		md.Running = false
 		md.Profile.Enabled = false
 		_ = m.store.Save(md.Profile)
+		m.mu.Unlock()
 		return nil
 	}
 
-	md.Dev.Stop()
+	dev := md.Dev
 	md.Running = false
 	md.Dev = nil
 	md.Profile.Enabled = false
 	_ = m.store.Save(md.Profile)
+	m.mu.Unlock()
+
+	dev.Stop()
 	log.Printf("[manager] device %s stopped", id)
 	return nil
 }
@@ -214,17 +217,28 @@ func (m *Manager) StartAll() []error {
 // StopAll 停止所有设备。
 func (m *Manager) StopAll() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	var toStop []*Device
 	for _, md := range m.devs {
 		if md.Running && md.Dev != nil {
-			md.Dev.Stop()
+			toStop = append(toStop, md.Dev)
 			md.Running = false
 			md.Dev = nil
 		}
 	}
+	m.mu.Unlock()
+
+	var wg sync.WaitGroup
+	for _, dev := range toStop {
+		wg.Add(1)
+		go func(d *Device) {
+			defer wg.Done()
+			d.Stop()
+		}(dev)
+	}
+	wg.Wait()
 	log.Printf("[manager] all devices stopped")
 }
+
 
 // AddDevice 新增模拟设备。
 func (m *Manager) AddDevice(p *config.DeviceProfile) error {
@@ -310,25 +324,30 @@ func (m *Manager) UpdateProfile(id string, p *config.DeviceProfile, restart bool
 // DeleteDevice 删除指定设备。
 func (m *Manager) DeleteDevice(id string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	id = config.NormalizeGBID(id)
 	md, ok := m.devs[id]
 	if !ok {
+		m.mu.Unlock()
 		return fmt.Errorf("device not found: %s", id)
 	}
 
-	if md.Running && md.Dev != nil {
-		md.Dev.Stop()
+	dev := md.Dev
+	if md.Running && dev != nil {
 		md.Running = false
 		md.Dev = nil
 	}
 
 	if err := m.store.Delete(id); err != nil {
+		m.mu.Unlock()
 		return err
 	}
 
 	delete(m.devs, id)
+	m.mu.Unlock()
+
+	if dev != nil {
+		dev.Stop()
+	}
 	log.Printf("[manager] device %s deleted", id)
 	return nil
 }
@@ -428,11 +447,17 @@ func (m *Manager) GetDevice(id string) (*Device, error) {
 
 // AddChannel 新增通道（运行中热增，停止态保存至配置）。
 func (m *Manager) AddChannel(deviceID string, req AddChannelRequest) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	id := config.NormalizeGBID(deviceID)
+	m.mu.RLock()
 	md, ok := m.devs[id]
+	var dev *Device
+	running := false
+	if ok {
+		dev = md.Dev
+		running = md.Running && dev != nil
+	}
+	m.mu.RUnlock()
+
 	if !ok {
 		return fmt.Errorf("device not found: %s", id)
 	}
@@ -442,11 +467,13 @@ func (m *Manager) AddChannel(deviceID string, req AddChannelRequest) error {
 		return fmt.Errorf("通道编号必须是 20 位国标编码")
 	}
 
-	if md.Running && md.Dev != nil {
-		return md.Dev.AddChannel(req)
+	if running {
+		return dev.AddChannel(req)
 	}
 
 	// 离线/停止态：直接改 profile 并存盘
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, ch := range md.Profile.Device.Channels {
 		if ch.ID == chID {
 			return fmt.Errorf("通道已存在: %s", chID)
@@ -483,18 +510,26 @@ func (m *Manager) AddChannel(deviceID string, req AddChannelRequest) error {
 
 // UpdateChannel 更新通道信息。
 func (m *Manager) UpdateChannel(deviceID string, req UpdateChannelRequest) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	id := config.NormalizeGBID(deviceID)
+	m.mu.RLock()
 	md, ok := m.devs[id]
+	var dev *Device
+	running := false
+	if ok {
+		dev = md.Dev
+		running = md.Running && dev != nil
+	}
+	m.mu.RUnlock()
+
 	if !ok {
 		return fmt.Errorf("device not found: %s", id)
 	}
-	if md.Running && md.Dev != nil {
-		return md.Dev.UpdateChannel(req)
+	if running {
+		return dev.UpdateChannel(req)
 	}
 
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	chID := config.NormalizeGBID(req.ID)
 	found := false
 	for i := range md.Profile.Device.Channels {
@@ -518,18 +553,26 @@ func (m *Manager) UpdateChannel(deviceID string, req UpdateChannelRequest) error
 
 // RemoveChannel 删除通道。
 func (m *Manager) RemoveChannel(deviceID, channelID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	id := config.NormalizeGBID(deviceID)
+	m.mu.RLock()
 	md, ok := m.devs[id]
+	var dev *Device
+	running := false
+	if ok {
+		dev = md.Dev
+		running = md.Running && dev != nil
+	}
+	m.mu.RUnlock()
+
 	if !ok {
 		return fmt.Errorf("device not found: %s", id)
 	}
-	if md.Running && md.Dev != nil {
-		return md.Dev.RemoveChannel(channelID)
+	if running {
+		return dev.RemoveChannel(channelID)
 	}
 
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	chID := config.NormalizeGBID(channelID)
 	found := false
 	for i, ch := range md.Profile.Device.Channels {
@@ -550,18 +593,26 @@ func (m *Manager) RemoveChannel(deviceID, channelID string) error {
 
 // BindChannelVideo 绑定通道媒体文件。
 func (m *Manager) BindChannelVideo(deviceID string, req BindChannelRequest) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	id := config.NormalizeGBID(deviceID)
+	m.mu.RLock()
 	md, ok := m.devs[id]
+	var dev *Device
+	running := false
+	if ok {
+		dev = md.Dev
+		running = md.Running && dev != nil
+	}
+	m.mu.RUnlock()
+
 	if !ok {
 		return fmt.Errorf("device not found: %s", id)
 	}
-	if md.Running && md.Dev != nil {
-		return md.Dev.BindChannelVideo(req)
+	if running {
+		return dev.BindChannelVideo(req)
 	}
 
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	chID := config.NormalizeGBID(req.ChannelID)
 	if md.Profile.Media.Channels == nil {
 		md.Profile.Media.Channels = map[string]config.ChannelMediaConfig{}
@@ -578,25 +629,32 @@ func (m *Manager) BindChannelVideo(deviceID string, req BindChannelRequest) erro
 		cfg.H264File = h
 	}
 	md.Profile.Media.Channels[chID] = cfg
-	if source != "synthetic" || req.MP4 != "" || req.H264 != "" {
-		md.Profile.Media.Mode = "per_channel"
-	}
+	md.Profile.Media.Mode = "per_channel"
 	return m.store.Save(md.Profile)
 }
 
 // SetMediaMode 设置媒体分发模式 shared | per_channel。
 func (m *Manager) SetMediaMode(deviceID, mode string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	id := config.NormalizeGBID(deviceID)
+	m.mu.RLock()
 	md, ok := m.devs[id]
+	var dev *Device
+	running := false
+	if ok {
+		dev = md.Dev
+		running = md.Running && dev != nil
+	}
+	m.mu.RUnlock()
+
 	if !ok {
 		return fmt.Errorf("device not found: %s", id)
 	}
-	if md.Running && md.Dev != nil {
-		return md.Dev.SetMediaMode(mode)
+	if running {
+		return dev.SetMediaMode(mode)
 	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode != "shared" && mode != "per_channel" {
 		return fmt.Errorf("mode 必须是 shared 或 per_channel")

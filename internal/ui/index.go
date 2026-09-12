@@ -282,6 +282,47 @@ select{cursor:pointer}
 .ch-name{font-size:13px;font-weight:700;color:#fff}
 .ch-id{font-size:11px;font-family:var(--font-mono);color:var(--text-dim)}
 
+/* PTZ Controller Pad */
+.ptz-pad-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 46px);
+  grid-template-rows: repeat(3, 46px);
+  gap: 8px;
+  justify-content: center;
+}
+.ptz-btn {
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-main);
+  font-size: 16px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.12s;
+}
+.ptz-btn:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+.ptz-btn:active {
+  transform: scale(0.92);
+}
+.ptz-btn.stop {
+  background: rgba(244,63,94,0.18);
+  border-color: rgba(244,63,94,0.35);
+  color: #fda4af;
+}
+.ptz-btn.stop:hover {
+  background: var(--err);
+  color: #fff;
+}
+
 /* Session Items */
 .session-item{
   background:var(--surface-2);border:1px solid var(--border);
@@ -724,6 +765,7 @@ select{cursor:pointer}
             <label class="form-label">全局默认视频源类型</label>
             <select id="cfgMediaSource">
               <option value="mp4">本地 MP4 视频文件 (推荐)</option>
+              <option value="ptz">🕹️ PTZ 3D 虚拟全景动态流 (随云台转动实时渲染)</option>
               <option value="file">Annex-B H.264 原生文件</option>
               <option value="synthetic">内置合成彩条流</option>
             </select>
@@ -944,6 +986,145 @@ select{cursor:pointer}
   </div>
 </div>
 
+<!-- Modal: PTZ Control & Presets -->
+<div class="modal-mask" id="ptzModal">
+  <div class="modal-box" style="max-width:980px">
+    <div class="modal-head">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:20px">🕹️</span>
+        <div>
+          <h3 id="ptzModalTitle" style="margin:0;font-size:15px">虚拟云台姿态与预置位操控</h3>
+          <div id="ptzModalSubtitle" style="font-size:11px;color:var(--text-dim)">通道ID: -</div>
+        </div>
+      </div>
+      <button class="btn btn-sm" onclick="closePTZModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <!-- 3D 虚拟全景监控视口 -->
+      <div style="background:var(--bg-dark);border-radius:var(--radius);border:1px solid var(--border);position:relative;overflow:hidden;margin-bottom:14px;box-shadow:inset 0 0 40px rgba(0,0,0,0.85)">
+        <!-- 视口顶部 OSD 栏 -->
+        <div style="position:absolute;top:8px;left:12px;right:12px;display:flex;justify-content:space-between;align-items:center;pointer-events:none;z-index:3">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="badge live" style="background:rgba(16,185,129,0.25);border-color:rgba(16,185,129,0.5);color:#6ee7b7;padding:2px 8px;font-size:10px">
+              <span class="dot"></span>LIVE 虚拟全景视口
+            </span>
+            <span id="ptzCamOsdTag" style="font-size:11px;font-family:var(--font-mono);color:#cbd5e1;background:rgba(0,0,0,0.6);padding:2px 6px;border-radius:4px;border:1px solid rgba(255,255,255,0.1)">
+              CAM-01 · 1080P@25FPS
+            </span>
+            <span id="ptzStreamSourceBadge" class="badge" style="font-size:10px;padding:2px 8px;cursor:pointer;pointer-events:auto" onclick="togglePTZChannelStreamSource()" title="点击一键切换该通道推送给WVP的视频源 (MP4录像 / PTZ虚拟动态流)">
+              国标推流: 检测中...
+            </span>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <button class="btn btn-sm" onclick="snapshotPTZCanvas()" style="pointer-events:auto;background:rgba(30,41,59,0.85);backdrop-filter:blur(4px);font-size:11px;padding:3px 8px" title="抓拍保存当前视口画面">📸 抓拍快照</button>
+            <button class="btn btn-sm" onclick="resetPTZView()" style="pointer-events:auto;background:rgba(30,41,59,0.85);backdrop-filter:blur(4px);font-size:11px;padding:3px 8px" title="将视口回正到正北 (0°) 平视">🎯 视口回正</button>
+          </div>
+        </div>
+
+        <!-- 3D 视口画布 -->
+        <canvas id="ptzViewportCanvas" width="940" height="270" style="display:block;width:100%;height:270px;cursor:grab;background:#050914"></canvas>
+
+        <!-- 视口底部提示与目标锁定栏 -->
+        <div style="position:absolute;bottom:6px;left:12px;right:12px;display:flex;justify-content:space-between;align-items:center;pointer-events:none;z-index:3;font-size:11px;color:rgba(255,255,255,0.7);font-family:var(--font-mono)">
+          <span id="ptzOsdTime">2026-09-12 18:45:00.000</span>
+          <span style="color:var(--accent);font-size:10px">🖱️ 画面内支持鼠标拖拽旋转云台 · 滚轮缩放变倍</span>
+          <span id="ptzOsdTarget" style="color:#38bdf8;font-weight:600">目标: 园区正门 (0°)</span>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1.1fr 1fr;gap:18px">
+      <!-- 左侧：云台姿态与控制 -->
+      <div style="background:var(--surface-2);border-radius:var(--radius);padding:14px;border:1px solid var(--border);display:flex;flex-direction:column;gap:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="font-weight:700;font-size:12px;color:var(--text-main);letter-spacing:0.04em">球机当前姿态</span>
+          <span id="ptzStatusBadge" class="badge"><span class="dot"></span><span id="ptzStatusText">检测中...</span></span>
+        </div>
+
+        <!-- 仪表显示卡片 -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;text-align:center">
+          <div style="background:var(--bg-dark);padding:8px 4px;border-radius:var(--radius-sm);border:1px solid var(--border)">
+            <div style="font-size:10px;color:var(--text-dim);margin-bottom:2px">航向角 (Pan)</div>
+            <div style="font-size:17px;font-weight:700;color:var(--cyan);font-family:var(--font-mono)" id="ptzValPan">0.0°</div>
+            <div style="font-size:10px;color:var(--text-muted);margin-top:2px" id="ptzPanDir">正北 (0°)</div>
+          </div>
+          <div style="background:var(--bg-dark);padding:8px 4px;border-radius:var(--radius-sm);border:1px solid var(--border)">
+            <div style="font-size:10px;color:var(--text-dim);margin-bottom:2px">俯仰角 (Tilt)</div>
+            <div style="font-size:17px;font-weight:700;color:var(--ok);font-family:var(--font-mono)" id="ptzValTilt">0.0°</div>
+            <div style="font-size:10px;color:var(--text-muted);margin-top:2px" id="ptzTiltDir">水平平视</div>
+          </div>
+          <div style="background:var(--bg-dark);padding:8px 4px;border-radius:var(--radius-sm);border:1px solid var(--border)">
+            <div style="font-size:10px;color:var(--text-dim);margin-bottom:2px">变倍比 (Zoom)</div>
+            <div style="font-size:17px;font-weight:700;color:var(--purple);font-family:var(--font-mono)" id="ptzValZoom">1.0x</div>
+            <div style="font-size:10px;color:var(--text-muted);margin-top:2px">广角全景</div>
+          </div>
+        </div>
+
+        <!-- 8 方向物理操控盘 -->
+        <div style="display:flex;flex-direction:column;align-items:center;gap:10px;margin-top:2px">
+          <div class="ptz-pad-grid">
+            <button class="ptz-btn" onmousedown="startPTZ('upleft')" onmouseup="stopPTZ()" title="左上">↖</button>
+            <button class="ptz-btn" onmousedown="startPTZ('up')" onmouseup="stopPTZ()" title="向上">▲</button>
+            <button class="ptz-btn" onmousedown="startPTZ('upright')" onmouseup="stopPTZ()" title="右上">↗</button>
+            <button class="ptz-btn" onmousedown="startPTZ('left')" onmouseup="stopPTZ()" title="向左">◀</button>
+            <button class="ptz-btn stop" onclick="stopPTZ()" title="急停">■</button>
+            <button class="ptz-btn" onmousedown="startPTZ('right')" onmouseup="stopPTZ()" title="向右">▶</button>
+            <button class="ptz-btn" onmousedown="startPTZ('downleft')" onmouseup="stopPTZ()" title="左下">↙</button>
+            <button class="ptz-btn" onmousedown="startPTZ('down')" onmouseup="stopPTZ()" title="向下">▼</button>
+            <button class="ptz-btn" onmousedown="startPTZ('downright')" onmouseup="stopPTZ()" title="右下">↘</button>
+          </div>
+
+          <!-- 镜头变倍按键 -->
+          <div style="display:flex;gap:8px;width:100%;justify-content:center">
+            <button class="btn btn-sm" onmousedown="startPTZ('zoomin')" onmouseup="stopPTZ()" style="flex:1">🔍 放大 (+)</button>
+            <button class="btn btn-sm" onmousedown="startPTZ('zoomout')" onmouseup="stopPTZ()" style="flex:1">🔎 缩小 (-)</button>
+          </div>
+
+          <!-- 速度调节滑块 -->
+          <div style="width:100%;background:var(--bg-dark);padding:8px 12px;border-radius:var(--radius-sm);border:1px solid var(--border)">
+            <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:4px">
+              <span style="color:var(--text-dim)">手动转动速度 (0~255)</span>
+              <span id="ptzSpeedLabel" style="color:var(--accent);font-weight:700">80</span>
+            </div>
+            <input type="range" id="ptzSpeedSlider" min="10" max="255" value="80" style="width:100%" oninput="document.getElementById('ptzSpeedLabel').innerText = this.value"/>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧：预置位管理 (PresetList) -->
+      <div style="background:var(--surface-2);border-radius:var(--radius);padding:14px;border:1px solid var(--border);display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="font-weight:700;font-size:12px;color:var(--text-main);letter-spacing:0.04em">预置位列表 (PresetList)</span>
+          <button class="btn btn-sm btn-primary" onclick="promptSaveCurrentPreset()">+ 存当前姿态为预置位</button>
+        </div>
+
+        <div style="flex:1;min-height:240px;max-height:340px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-dark)">
+          <table style="width:100%;border-collapse:collapse;font-size:12px" id="ptzPresetTable">
+            <thead>
+              <tr style="border-bottom:1px solid var(--border);background:var(--surface-3);color:var(--text-dim);text-align:left">
+                <th style="padding:6px 8px">ID</th>
+                <th style="padding:6px 8px">预置位名称</th>
+                <th style="padding:6px 8px">坐标 (P/T/Z)</th>
+                <th style="padding:6px 8px;text-align:right">操作</th>
+              </tr>
+            </thead>
+            <tbody id="ptzPresetTbody">
+              <tr><td colspan="4" style="padding:20px;text-align:center;color:var(--text-dim)">加载预置位列表中...</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div style="font-size:11px;color:var(--text-dim);line-height:1.5;background:rgba(59,130,246,0.06);padding:8px 10px;border-radius:var(--radius-sm);border:1px solid rgba(59,130,246,0.2)">
+          💡 <b>平台联动说明</b>：平台（如 WVP）下发 <code>PresetQuery</code> 会查询此列表；平台下发 <code>0x81</code> 设置、<code>0x82</code> 调用、<code>0x83</code> 删除预置位时，此处将实时响应并自动持久化。
+        </div>
+      </div>
+    </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closePTZModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast-box" id="toastBox"></div>
 
 <script>
@@ -981,10 +1162,19 @@ function openModal(id){ document.getElementById(id).classList.add('open'); }
 function closeModal(id){ document.getElementById(id).classList.remove('open'); }
 
 async function api(url, method, body){
-  const opts = {method: method || 'GET'};
-  if(body){
-    opts.headers = {'Content-Type': 'application/json'};
-    opts.body = JSON.stringify(body);
+  let opts = {method: 'GET'};
+  if(typeof method === 'object' && method !== null){
+    opts = Object.assign({}, method);
+    if(opts.body && typeof opts.body === 'object' && !(opts.body instanceof FormData) && !(opts.body instanceof Blob)){
+      opts.headers = Object.assign({'Content-Type': 'application/json'}, opts.headers || {});
+      opts.body = JSON.stringify(opts.body);
+    }
+  } else {
+    opts.method = method || 'GET';
+    if(body !== undefined && body !== null){
+      opts.headers = Object.assign({'Content-Type': 'application/json'}, opts.headers || {});
+      opts.body = (typeof body === 'string') ? body : JSON.stringify(body);
+    }
   }
   try{
     const r = await fetch(url, opts);
@@ -1172,7 +1362,8 @@ function renderChannels(channels, mediaCfg, sessions){
     const boundSrc = chMedia.source || (mediaCfg.source || 'mp4');
 
     let boundLabel = '全局默认';
-    if(boundSrc === 'synthetic') boundLabel = '内置彩条流';
+    if(boundSrc === 'ptz') boundLabel = '🕹️ PTZ 虚拟流';
+    else if(boundSrc === 'synthetic') boundLabel = '内置彩条流';
     else if(boundMp4) boundLabel = boundMp4.split('/').pop();
     else if(boundH264) boundLabel = boundH264.split('/').pop();
 
@@ -1195,6 +1386,7 @@ function renderChannels(channels, mediaCfg, sessions){
       '<div style="display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap">' +
         '<select class="channel-bind-select" style="flex:1;min-width:140px">' +
           '<option value="">使用全局默认视频</option>' +
+          '<option value="__ptz__" ' + (boundSrc==='ptz'?'selected':'') + '>🕹️ PTZ 虚拟全景流 (随云台转动)</option>' +
           '<option value="__synthetic__" ' + (boundSrc==='synthetic'?'selected':'') + '>内置彩条测试流</option>' +
           videoList.map(function(v){
             const sel = (boundMp4===v.path || boundH264===v.path || boundMp4===v.name) ? 'selected' : '';
@@ -1202,6 +1394,7 @@ function renderChannels(channels, mediaCfg, sessions){
           }).join('') +
         '</select>' +
         '<button class="btn btn-sm btn-primary" onclick="bindChannelMedia(\'' + esc(ch.id) + '\', this)">绑定</button>' +
+        '<button class="btn btn-sm" onclick="openPTZModal(\'' + esc(ch.id) + '\',\'' + esc(ch.name) + '\')">🕹️ 云台与预置位</button>' +
         '<button class="btn btn-sm" onclick="toggleChannelStatus(\'' + esc(ch.id) + '\',\'' + (ch.status==='ON'?'OFF':'ON') + '\')">' + (ch.status==='ON'?'设为离线':'设为在线') + '</button>' +
         '<button class="btn btn-sm btn-danger" onclick="removeChannel(\'' + esc(ch.id) + '\')">删除</button>' +
       '</div>' +
@@ -1668,7 +1861,8 @@ async function bindChannelMedia(chId, btn){
   const sel = btn.parentElement.querySelector('.channel-bind-select');
   const val = sel.value;
   let body;
-  if(val === '__synthetic__') body = {channelId: chId, source: 'synthetic'};
+  if(val === '__ptz__') body = {channelId: chId, source: 'ptz'};
+  else if(val === '__synthetic__') body = {channelId: chId, source: 'synthetic'};
   else if(!val) body = {channelId: chId, source: 'mp4', mp4: ''};
   else if(val.endsWith('.h264') || val.endsWith('.264')) body = {channelId: chId, source: 'file', h264: val};
   else body = {channelId: chId, source: 'mp4', mp4: val};
@@ -1839,6 +2033,1174 @@ function exportLogs(){
   a.download = 'gb28181_' + activeDeviceId + '.log';
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// ==================== PTZ & Presets ====================
+let activePTZChannel = null;
+let ptzPollTimer = null;
+let ptzFastPollTimer = null;
+
+// Virtual Viewport Engine State
+let ptzCanvasAnimId = null;
+let ptzCurPan = 0;
+let ptzCurTilt = 0;
+let ptzCurZoom = 1.0;
+let ptzTargetPan = 0;
+let ptzTargetTilt = 0;
+let ptzTargetZoom = 1.0;
+let ptzIsMoving = false;
+let ptzPanDir = 0;
+let ptzTiltDir = 0;
+let ptzZoomDir = 0;
+let ptzPanSpeed = 64;
+let ptzTiltSpeed = 64;
+let ptzZoomSpeed = 4;
+let ptzFirstInit = true;
+
+let ptzIsDragging = false;
+let ptzDragStartX = 0;
+let ptzDragStartY = 0;
+let ptzDragStartPan = 0;
+let ptzDragStartTilt = 0;
+let ptzDragSyncTimer = null;
+let ptzListenersAttached = false;
+
+if(typeof CanvasRenderingContext2D !== 'undefined' && !CanvasRenderingContext2D.prototype.roundRect){
+  CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r){
+    if(typeof r === 'undefined') r = 4;
+    if(typeof r === 'number') r = [r, r, r, r];
+    const tl = r[0] || 0, tr = r[1] || tl, br = r[2] || tl, bl = r[3] || tr;
+    this.beginPath();
+    this.moveTo(x + tl, y);
+    this.lineTo(x + w - tr, y);
+    this.quadraticCurveTo(x + w, y, x + w, y + tr);
+    this.lineTo(x + w, y + h - br);
+    this.quadraticCurveTo(x + w, y + h, x + w - br, y + h);
+    this.lineTo(x + bl, y + h);
+    this.quadraticCurveTo(x, y + h, x, y + h - bl);
+    this.lineTo(x, y + tl);
+    this.quadraticCurveTo(x, y, x + tl, y);
+    this.closePath();
+    return this;
+  };
+}
+
+const PTZ_LANDMARKS = [
+  { az: 0,   name: '园区正门主出入口', type: 'gate',       dist: 70,  color: '#38bdf8', tag: '01号岗亭·车牌识别' },
+  { az: 45,  name: '综合科研大厦 A座',  type: 'tower',      dist: 160, color: '#818cf8', tag: '18层研发楼·顶层天线' },
+  { az: 90,  name: '东环主干道绿化带',  type: 'highway',    dist: 120, color: '#34d399', tag: '路灯光网·车流干线' },
+  { az: 135, name: '智能生态停车场 P1', type: 'parking',    dist: 85,  color: '#fbbf24', tag: '快充车位·地磁感应' },
+  { az: 180, name: '核心数据机房 B座',  type: 'datacenter', dist: 130, color: '#60a5fa', tag: '算力中心·散热冷塔' },
+  { az: 225, name: '西周界电子防区',    type: 'fence',      dist: 100, color: '#f87171', tag: '红外脉冲·警戒警报' },
+  { az: 270, name: '智慧物流装卸平台',  type: 'logistics',  dist: 140, color: '#fb923c', tag: '智能堆垛·集装货场' },
+  { az: 315, name: '变电站与微波铁塔',  type: 'substation', dist: 180, color: '#c084fc', tag: '110KV变电·高耸塔架' }
+];
+
+const PTZ_STARS = [];
+for(let i=0; i<60; i++){
+  PTZ_STARS.push({
+    az: (i * 37) % 360,
+    elev: 5 + (i * 13) % 75,
+    size: 0.8 + ((i * 7) % 3) * 0.6,
+    alpha: 0.35 + ((i * 11) % 5) * 0.12
+  });
+}
+
+function normDeg(d){
+  return ((d % 360) + 360) % 360;
+}
+
+function degDiff(a, b){
+  let d = a - b;
+  while(d < -180) d += 360;
+  while(d > 180) d -= 360;
+  return d;
+}
+
+function lerpAngle(cur, target, factor){
+  let diff = degDiff(target, cur);
+  if(Math.abs(diff) < 0.04) return target;
+  return normDeg(cur + diff * factor);
+}
+
+function lerpVal(cur, target, factor){
+  if(Math.abs(target - cur) < 0.02) return target;
+  return cur + (target - cur) * factor;
+}
+
+function formatCompassDir(pan){
+  const p = ((pan % 360) + 360) % 360;
+  if(p >= 337.5 || p < 22.5) return '正北 (N)';
+  if(p >= 22.5 && p < 67.5) return '东北 (NE)';
+  if(p >= 67.5 && p < 112.5) return '正东 (E)';
+  if(p >= 112.5 && p < 157.5) return '东南 (SE)';
+  if(p >= 157.5 && p < 202.5) return '正南 (S)';
+  if(p >= 202.5 && p < 247.5) return '西南 (SW)';
+  if(p >= 247.5 && p < 292.5) return '正西 (W)';
+  return '西北 (NW)';
+}
+
+function formatTiltDir(tilt){
+  if(Math.abs(tilt) < 1.0) return '水平平视 (0°)';
+  if(tilt > 0) return '仰视 +' + tilt.toFixed(1) + '°';
+  return '俯视 ' + tilt.toFixed(1) + '°';
+}
+
+function drawPTZViewport(){
+  const canvas = document.getElementById('ptzViewportCanvas');
+  if(!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const rect = canvas.getBoundingClientRect();
+  const w = Math.round(rect.width || 940);
+  const h = 270;
+  const dpr = window.devicePixelRatio || 1;
+
+  if(canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)){
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+  }
+
+  ctx.save();
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+
+  const baseFovH = 60.0;
+  const fovH = baseFovH / Math.max(1, ptzCurZoom);
+  const fovV = fovH * (h / w);
+
+  // Horizon line: tilt > 0 is looking up (horizon goes down), tilt < 0 is looking down (horizon goes up)
+  const horizonY = (h * 0.5) + (ptzCurTilt / (fovV * 0.5)) * (h * 0.5);
+
+  // 1. Sky Gradient & Twinkling Stars
+  const skyH = Math.max(0, Math.min(h, horizonY));
+  if(skyH > 0){
+    const skyGrad = ctx.createLinearGradient(0, 0, 0, skyH);
+    skyGrad.addColorStop(0, '#020510');
+    skyGrad.addColorStop(0.6, '#060f24');
+    skyGrad.addColorStop(1, '#111d38');
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(0, 0, w, skyH);
+
+    ctx.save();
+    for(let i=0; i<PTZ_STARS.length; i++){
+      const st = PTZ_STARS[i];
+      const sDiff = degDiff(st.az, ptzCurPan);
+      if(Math.abs(sDiff) < fovH * 0.55){
+        const sx = (w * 0.5) + (sDiff / (fovH * 0.5)) * (w * 0.5);
+        const sy = horizonY - (st.elev / (fovV * 0.5)) * (h * 0.5);
+        if(sy >= 2 && sy < horizonY - 4){
+          ctx.fillStyle = 'rgba(224, 242, 254, ' + st.alpha + ')';
+          ctx.beginPath();
+          ctx.arc(sx, sy, st.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+    ctx.restore();
+  }
+
+  // 2. Ground Plane & Perspective Grid
+  if(horizonY < h){
+    const gTop = Math.max(0, horizonY);
+    const gH = h - gTop;
+    const groundGrad = ctx.createLinearGradient(0, gTop, 0, h);
+    groundGrad.addColorStop(0, '#070f1e');
+    groundGrad.addColorStop(0.3, '#050b16');
+    groundGrad.addColorStop(1, '#020409');
+    ctx.fillStyle = groundGrad;
+    ctx.fillRect(0, gTop, w, gH);
+
+    // Perspective grid rays radiating from vanishing point
+    ctx.save();
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.12)';
+    ctx.lineWidth = 1;
+    const panFloor = Math.floor(ptzCurPan / 10) * 10;
+    for(let a = panFloor - 40; a <= panFloor + 40; a += 10){
+      const diff = degDiff(a, ptzCurPan);
+      if(Math.abs(diff) < fovH * 0.65){
+        const startX = (w * 0.5) + (diff / (fovH * 0.5)) * (w * 0.5);
+        const bottomX = (w * 0.5) + (diff / (fovH * 0.5)) * (w * 0.5) * 2.6;
+        ctx.beginPath();
+        ctx.moveTo(startX, horizonY);
+        ctx.lineTo(bottomX, h);
+        ctx.stroke();
+      }
+    }
+
+    // Concentric distance rings
+    const distRings = [
+      { d: 160, label: '160m', ratio: 0.22 },
+      { d: 100, label: '100m', ratio: 0.48 },
+      { d: 60,  label: '60m',  ratio: 0.78 }
+    ];
+    for(let r=0; r<distRings.length; r++){
+      const ring = distRings[r];
+      const ry = horizonY + (h - horizonY) * ring.ratio;
+      if(ry > 0 && ry < h){
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.18)';
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(0, ry);
+        ctx.lineTo(w, ry);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.35)';
+        ctx.font = '9px monospace';
+        ctx.fillText('DIST ' + ring.label, w - 65, ry - 3);
+      }
+    }
+    ctx.restore();
+  }
+
+  // Horizon Glowing Line
+  if(horizonY >= 0 && horizonY <= h){
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, horizonY);
+    ctx.lineTo(w, horizonY);
+    ctx.stroke();
+  }
+
+  // 3. Draw Landmarks (Far to Near)
+  const sortedLandmarks = PTZ_LANDMARKS.slice().sort(function(a, b){
+    return b.dist - a.dist;
+  });
+
+  let lockedLandmark = null;
+  let minCenterDiff = 999;
+
+  for(let i=0; i<sortedLandmarks.length; i++){
+    const lm = sortedLandmarks[i];
+    const diff = degDiff(lm.az, ptzCurPan);
+    if(Math.abs(diff) < fovH * 0.65){
+      const sx = (w * 0.5) + (diff / (fovH * 0.5)) * (w * 0.5);
+      const scale = Math.min(3.2, Math.max(0.4, (80.0 / lm.dist) * (0.6 + ptzCurZoom * 0.35)));
+      const groundRatio = Math.min(0.9, Math.max(0.15, 65.0 / lm.dist));
+      const baseY = horizonY + Math.max(10, (h - horizonY) * groundRatio);
+
+      if(Math.abs(diff) < minCenterDiff){
+        minCenterDiff = Math.abs(diff);
+        if(Math.abs(diff) < 5.0){
+          lockedLandmark = lm;
+        }
+      }
+
+      ctx.save();
+      ctx.translate(sx, baseY);
+      drawSingleLandmark(ctx, lm, scale, (lockedLandmark === lm));
+      ctx.restore();
+    }
+  }
+
+  // Update OSD target text
+  const osdTargetEl = document.getElementById('ptzOsdTarget');
+  if(osdTargetEl){
+    if(lockedLandmark){
+      osdTargetEl.innerHTML = '🎯 锁定: <span style="color:' + lockedLandmark.color + ';font-weight:700">' +
+        lockedLandmark.name + '</span> (' + lockedLandmark.az + '° · ' + lockedLandmark.dist + 'm)';
+    } else {
+      osdTargetEl.innerHTML = '🎯 巡航视口: 方位 ' + ptzCurPan.toFixed(1) + '° · 俯仰 ' +
+        (ptzCurTilt >= 0 ? '+' : '') + ptzCurTilt.toFixed(1) + '° · ' + ptzCurZoom.toFixed(1) + 'x';
+    }
+  }
+
+  // 4. Military/Tactical Top Compass Ribbon
+  drawCompassRibbon(ctx, w, ptzCurPan, fovH);
+
+  // 5. Tactical Center Crosshair HUD
+  drawTacticalHUD(ctx, w, h, ptzCurPan, ptzCurTilt, ptzCurZoom, lockedLandmark);
+
+  ctx.restore();
+}
+
+function drawSingleLandmark(ctx, lm, scale, isLocked){
+  const s = scale;
+  ctx.save();
+
+  if(lm.type === 'gate'){
+    // Gate Pillars
+    ctx.fillStyle = '#1e293b';
+    ctx.strokeStyle = '#475569';
+    ctx.lineWidth = 1.5;
+    ctx.fillRect(-50*s, -55*s, 16*s, 55*s);
+    ctx.strokeRect(-50*s, -55*s, 16*s, 55*s);
+    ctx.fillRect(34*s, -55*s, 16*s, 55*s);
+    ctx.strokeRect(34*s, -55*s, 16*s, 55*s);
+    // Header Beam
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(-56*s, -68*s, 112*s, 15*s);
+    ctx.strokeStyle = lm.color;
+    ctx.strokeRect(-56*s, -68*s, 112*s, 15*s);
+    // Banner Text
+    ctx.fillStyle = '#38bdf8';
+    ctx.font = 'bold ' + Math.max(7, Math.round(7*s)) + 'px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('GB28181 NORTH GATE', 0, -58*s);
+    // Barrier Arm
+    ctx.strokeStyle = '#ef4444';
+    ctx.lineWidth = Math.max(2, 3*s);
+    ctx.beginPath();
+    ctx.moveTo(-34*s, -12*s);
+    ctx.lineTo(26*s, -12*s);
+    ctx.stroke();
+    // Guard Booth
+    ctx.fillStyle = '#334155';
+    ctx.fillRect(52*s, -32*s, 22*s, 32*s);
+    ctx.fillStyle = '#fef08a';
+    ctx.fillRect(56*s, -26*s, 14*s, 12*s);
+    // Pass LED
+    ctx.fillStyle = '#22c55e';
+    ctx.beginPath();
+    ctx.arc(38*s, -18*s, 2.5*s, 0, Math.PI*2);
+    ctx.fill();
+
+  } else if(lm.type === 'tower'){
+    // Skyscraper
+    ctx.fillStyle = '#0f172a';
+    ctx.strokeStyle = '#3b82f6';
+    ctx.lineWidth = 1.2;
+    ctx.fillRect(-35*s, -145*s, 70*s, 145*s);
+    ctx.strokeRect(-35*s, -145*s, 70*s, 145*s);
+    // Tiered top
+    ctx.fillRect(-22*s, -170*s, 44*s, 25*s);
+    ctx.strokeRect(-22*s, -170*s, 44*s, 25*s);
+    // Office Windows
+    const cols = 5;
+    const rows = 12;
+    const winW = 5*s;
+    const winH = 4*s;
+    for(let r=0; r<rows; r++){
+      for(let c=0; c<cols; c++){
+        const wx = -28*s + c * 12*s;
+        const wy = -135*s + r * 10*s;
+        ctx.fillStyle = ((r*5+c) % 3 === 0) ? 'rgba(56, 189, 248, 0.85)' : 'rgba(30, 58, 138, 0.4)';
+        ctx.fillRect(wx, wy, winW, winH);
+      }
+    }
+    // Rooftop Spire & Blinking Warning Beacon
+    ctx.strokeStyle = '#94a3b8';
+    ctx.lineWidth = Math.max(1, 1.5*s);
+    ctx.beginPath();
+    ctx.moveTo(0, -170*s);
+    ctx.lineTo(0, -200*s);
+    ctx.stroke();
+    const blink = (Date.now() % 800 < 400);
+    ctx.fillStyle = blink ? '#ef4444' : 'rgba(239, 68, 68, 0.3)';
+    ctx.beginPath();
+    ctx.arc(0, -200*s, 3*s, 0, Math.PI*2);
+    ctx.fill();
+
+  } else if(lm.type === 'highway'){
+    // Road surface
+    ctx.fillStyle = '#1e293b';
+    ctx.beginPath();
+    ctx.moveTo(-65*s, 0);
+    ctx.lineTo(65*s, 0);
+    ctx.lineTo(45*s, -35*s);
+    ctx.lineTo(-45*s, -35*s);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#334155';
+    ctx.stroke();
+    // Center divider dash
+    ctx.strokeStyle = '#facc15';
+    ctx.lineWidth = Math.max(1, 1.5*s);
+    ctx.setLineDash([6*s, 4*s]);
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, -35*s);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // Street Lamps
+    for(let lx of [-52*s, 52*s]){
+      ctx.strokeStyle = '#64748b';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(lx, 0);
+      ctx.lineTo(lx, -42*s);
+      ctx.lineTo(lx > 0 ? lx - 10*s : lx + 10*s, -45*s);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(253, 224, 71, 0.85)';
+      ctx.beginPath();
+      ctx.arc(lx > 0 ? lx - 10*s : lx + 10*s, -45*s, 2.5*s, 0, Math.PI*2);
+      ctx.fill();
+    }
+    // Animated car lights
+    const tCar = (Date.now() * 0.04) % (80*s);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(-35*s + tCar, -10*s, 4*s, 2*s);
+    ctx.fillStyle = '#ef4444';
+    ctx.fillRect(35*s - tCar, -22*s, 4*s, 2*s);
+
+  } else if(lm.type === 'parking'){
+    // Ground
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(-55*s, -25*s, 110*s, 25*s);
+    ctx.strokeStyle = '#334155';
+    ctx.strokeRect(-55*s, -25*s, 110*s, 25*s);
+    // Stalls & Cars
+    for(let p=-2; p<=2; p++){
+      const px = p * 20*s;
+      ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+      ctx.strokeRect(px - 8*s, -22*s, 16*s, 20*s);
+      if(p === -1 || p === 1 || p === 2){
+        ctx.fillStyle = (p === 1 ? '#38bdf8' : '#64748b');
+        ctx.fillRect(px - 6*s, -18*s, 12*s, 14*s);
+      }
+    }
+    // EV Charger
+    ctx.fillStyle = '#22c55e';
+    ctx.fillRect(-50*s, -32*s, 5*s, 12*s);
+    ctx.beginPath();
+    ctx.arc(-47.5*s, -34*s, 2*s, 0, Math.PI*2);
+    ctx.fill();
+    // Canopy
+    ctx.fillStyle = 'rgba(56, 189, 248, 0.2)';
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 1;
+    ctx.fillRect(-58*s, -38*s, 116*s, 5*s);
+    ctx.strokeRect(-58*s, -38*s, 116*s, 5*s);
+
+  } else if(lm.type === 'datacenter'){
+    // Data Center Cube
+    ctx.fillStyle = '#111827';
+    ctx.strokeStyle = '#60a5fa';
+    ctx.lineWidth = 1.5;
+    ctx.fillRect(-55*s, -65*s, 110*s, 65*s);
+    ctx.strokeRect(-55*s, -65*s, 110*s, 65*s);
+    // Server Rack Glowing Slits
+    for(let k=-1; k<=1; k++){
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.8)';
+      ctx.fillRect(k * 30*s - 3*s, -55*s, 6*s, 45*s);
+    }
+    // Rooftop Chillers
+    for(let ch=-1; ch<=1; ch+=2){
+      ctx.fillStyle = '#1f2937';
+      ctx.fillRect(ch * 28*s - 14*s, -78*s, 28*s, 13*s);
+      ctx.strokeStyle = '#4b5563';
+      ctx.strokeRect(ch * 28*s - 14*s, -78*s, 28*s, 13*s);
+      const fanAngle = Date.now() * 0.01;
+      ctx.save();
+      ctx.translate(ch * 28*s, -71.5*s);
+      ctx.rotate(fanAngle);
+      ctx.strokeStyle = '#9ca3af';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(-7*s, 0); ctx.lineTo(7*s, 0);
+      ctx.moveTo(0, -5*s); ctx.lineTo(0, 5*s);
+      ctx.stroke();
+      ctx.restore();
+    }
+    ctx.fillStyle = '#93c5fd';
+    ctx.font = 'bold ' + Math.max(7, Math.round(6.5*s)) + 'px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('IDC CLOUD B', 0, -7*s);
+
+  } else if(lm.type === 'fence'){
+    // Security Fence Posts
+    for(let f=-3; f<=3; f++){
+      const fx = f * 22*s;
+      ctx.fillStyle = '#475569';
+      ctx.fillRect(fx - 2*s, -42*s, 4*s, 42*s);
+      ctx.fillStyle = '#ef4444';
+      ctx.beginPath();
+      ctx.arc(fx, -43*s, 2.5*s, 0, Math.PI*2);
+      ctx.fill();
+    }
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-66*s, -35*s); ctx.lineTo(66*s, -35*s);
+    ctx.moveTo(-66*s, -20*s); ctx.lineTo(66*s, -20*s);
+    ctx.moveTo(-66*s, -6*s);  ctx.lineTo(66*s, -6*s);
+    ctx.stroke();
+    // Pulsing Laser
+    const laserAlpha = 0.4 + 0.5 * Math.sin(Date.now() * 0.008);
+    ctx.strokeStyle = 'rgba(239, 68, 68, ' + laserAlpha + ')';
+    ctx.lineWidth = Math.max(1.5, 2.2*s);
+    ctx.beginPath();
+    ctx.moveTo(-66*s, -43*s);
+    ctx.lineTo(66*s, -43*s);
+    ctx.stroke();
+    // Hazard Sign
+    ctx.fillStyle = '#eab308';
+    ctx.fillRect(-12*s, -28*s, 24*s, 10*s);
+    ctx.fillStyle = '#000000';
+    ctx.font = 'bold ' + Math.max(6, Math.round(5.5*s)) + 'px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('DANGER', 0, -20*s);
+
+  } else if(lm.type === 'logistics'){
+    // Logistics Hangar
+    ctx.fillStyle = '#1e293b';
+    ctx.fillRect(-60*s, -50*s, 120*s, 50*s);
+    ctx.strokeStyle = '#f97316';
+    ctx.lineWidth = 1.2;
+    ctx.strokeRect(-60*s, -50*s, 120*s, 50*s);
+    for(let d=-1; d<=1; d++){
+      const dx = d * 36*s;
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(dx - 12*s, -28*s, 24*s, 28*s);
+      ctx.strokeStyle = '#64748b';
+      ctx.strokeRect(dx - 12*s, -28*s, 24*s, 28*s);
+      ctx.fillStyle = '#cbd5e1';
+      ctx.font = 'bold ' + Math.max(6, Math.round(6*s)) + 'px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('0' + (d+2), dx, -12*s);
+    }
+    // Containers
+    ctx.fillStyle = '#0284c7';
+    ctx.fillRect(-55*s, -14*s, 26*s, 14*s);
+    ctx.fillStyle = '#ea580c';
+    ctx.fillRect(-52*s, -26*s, 22*s, 12*s);
+
+  } else if(lm.type === 'substation'){
+    // Lattice Tower
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.lineWidth = Math.max(1, 1.3*s);
+    ctx.beginPath();
+    ctx.moveTo(-24*s, 0);
+    ctx.lineTo(-4*s, -150*s);
+    ctx.lineTo(4*s, -150*s);
+    ctx.lineTo(24*s, 0);
+    ctx.stroke();
+    const tiers = [ -30*s, -65*s, -100*s, -130*s ];
+    for(let tr=0; tr<tiers.length; tr++){
+      const ty = tiers[tr];
+      ctx.beginPath();
+      ctx.moveTo(-20*s * (1 - tr*0.2), ty);
+      ctx.lineTo(20*s * (1 - tr*0.2), ty);
+      ctx.stroke();
+    }
+    // Microwave Dish
+    ctx.fillStyle = '#94a3b8';
+    ctx.beginPath();
+    ctx.ellipse(8*s, -110*s, 7*s, 11*s, 0.2, 0, Math.PI*2);
+    ctx.fill();
+    ctx.stroke();
+    // Beacon
+    ctx.beginPath();
+    ctx.moveTo(0, -150*s);
+    ctx.lineTo(0, -175*s);
+    ctx.stroke();
+    const blink2 = (Date.now() % 600 < 300);
+    ctx.fillStyle = blink2 ? '#ef4444' : 'rgba(239, 68, 68, 0.25)';
+    ctx.beginPath();
+    ctx.arc(0, -175*s, 3*s, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // Landmark Tag & Distance Label
+  const topH = (lm.type === 'tower' ? -205*s : (lm.type === 'substation' ? -180*s : -72*s));
+
+  ctx.save();
+  ctx.fillStyle = lm.color;
+  ctx.beginPath();
+  ctx.arc(0, topH, 2.5, 0, Math.PI*2);
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+  ctx.setLineDash([2, 2]);
+  ctx.beginPath();
+  ctx.moveTo(0, topH);
+  ctx.lineTo(0, topH - 10);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  const text = lm.name + ' · ' + lm.dist + 'm';
+  ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  const tw = ctx.measureText(text).width;
+  ctx.fillStyle = isLocked ? 'rgba(15, 23, 42, 0.95)' : 'rgba(15, 23, 42, 0.75)';
+  ctx.strokeStyle = isLocked ? lm.color : 'rgba(255,255,255,0.2)';
+  ctx.lineWidth = isLocked ? 1.5 : 1;
+  ctx.beginPath();
+  ctx.roundRect(-tw/2 - 6, topH - 24, tw + 12, 16, 4);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = isLocked ? lm.color : '#e2e8f0';
+  ctx.textAlign = 'center';
+  ctx.fillText(text, 0, topH - 12);
+
+  // If Target is Locked, draw animated Target Bracket Box
+  if(isLocked){
+    const boxW = Math.max(70, 110*s);
+    const boxH = Math.max(50, Math.abs(topH) + 15);
+    const pulse = 2 * Math.sin(Date.now() * 0.008);
+    const bw = boxW/2 + pulse;
+    const clen = 8;
+    const bTop = -boxH - pulse;
+
+    ctx.strokeStyle = lm.color;
+    ctx.lineWidth = 2;
+    // Top-Left
+    ctx.beginPath(); ctx.moveTo(-bw, bTop + clen); ctx.lineTo(-bw, bTop); ctx.lineTo(-bw + clen, bTop); ctx.stroke();
+    // Top-Right
+    ctx.beginPath(); ctx.moveTo(bw - clen, bTop); ctx.lineTo(bw, bTop); ctx.lineTo(bw, bTop + clen); ctx.stroke();
+    // Bottom-Left
+    ctx.beginPath(); ctx.moveTo(-bw, 5 - clen); ctx.lineTo(-bw, 5); ctx.lineTo(-bw + clen, 5); ctx.stroke();
+    // Bottom-Right
+    ctx.beginPath(); ctx.moveTo(bw - clen, 5); ctx.lineTo(bw, 5); ctx.lineTo(bw, 5 - clen); ctx.stroke();
+
+    ctx.fillStyle = lm.color;
+    ctx.font = 'bold 9px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('TARGET LOCKED', 0, bTop - 4);
+  }
+
+  ctx.restore();
+  ctx.restore();
+}
+
+function drawCompassRibbon(ctx, w, pan, fovH){
+  ctx.save();
+  const ribbonW = 380;
+  const ribbonH = 22;
+  const ribbonX = (w - ribbonW) / 2;
+  const ribbonY = 12;
+
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.7)';
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(ribbonX, ribbonY, ribbonW, ribbonH, 11);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.roundRect(ribbonX + 2, ribbonY + 2, ribbonW - 4, ribbonH - 4, 9);
+  ctx.clip();
+
+  const halfSpan = 35;
+  const startDeg = Math.floor((pan - halfSpan) / 5) * 5;
+  const endDeg = Math.ceil((pan + halfSpan) / 5) * 5;
+
+  for(let deg = startDeg; deg <= endDeg; deg += 5){
+    const dDiff = degDiff(deg, pan);
+    const x = (w * 0.5) + (dDiff / halfSpan) * (ribbonW * 0.46);
+    const norm = normDeg(deg);
+    const isMajor = (norm % 45 === 0);
+    const isMid = (!isMajor && norm % 15 === 0);
+
+    ctx.lineWidth = isMajor ? 1.5 : 1;
+    ctx.strokeStyle = isMajor ? '#38bdf8' : (isMid ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.2)');
+
+    const tickH = isMajor ? 8 : (isMid ? 5 : 3);
+    ctx.beginPath();
+    ctx.moveTo(x, ribbonY + ribbonH);
+    ctx.lineTo(x, ribbonY + ribbonH - tickH);
+    ctx.stroke();
+
+    if(isMajor || isMid){
+      let label = norm + '°';
+      if(norm === 0) label = 'N';
+      else if(norm === 45) label = 'NE';
+      else if(norm === 90) label = 'E';
+      else if(norm === 135) label = 'SE';
+      else if(norm === 180) label = 'S';
+      else if(norm === 225) label = 'SW';
+      else if(norm === 270) label = 'W';
+      else if(norm === 315) label = 'NW';
+
+      ctx.fillStyle = isMajor ? (norm === 0 ? '#f87171' : '#38bdf8') : 'rgba(255,255,255,0.6)';
+      ctx.font = isMajor ? 'bold 9px monospace' : '8px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(label, x, ribbonY + 10);
+    }
+  }
+
+  ctx.restore();
+
+  // Yellow pointer triangle pointing down
+  ctx.save();
+  ctx.fillStyle = '#facc15';
+  ctx.beginPath();
+  ctx.moveTo(w * 0.5 - 4, ribbonY - 1);
+  ctx.lineTo(w * 0.5 + 4, ribbonY - 1);
+  ctx.lineTo(w * 0.5, ribbonY + 5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawTacticalHUD(ctx, w, h, pan, tilt, zoom, locked){
+  ctx.save();
+  const cx = w * 0.5;
+  const cy = h * 0.5;
+
+  const hudColor = locked ? '#22c55e' : 'rgba(56, 189, 248, 0.5)';
+  ctx.strokeStyle = hudColor;
+  ctx.lineWidth = 1;
+
+  // Center crosshair with gap
+  ctx.beginPath();
+  ctx.moveTo(cx - 45, cy); ctx.lineTo(cx - 8, cy);
+  ctx.moveTo(cx + 8, cy);  ctx.lineTo(cx + 45, cy);
+  ctx.moveTo(cx, cy - 30); ctx.lineTo(cx, cy - 8);
+  ctx.moveTo(cx, cy + 8);  ctx.lineTo(cx, cy + 30);
+  ctx.stroke();
+
+  // Mil ticks
+  for(let m of [-30, -18, 18, 30]){
+    ctx.beginPath();
+    ctx.moveTo(cx + m, cy - 3); ctx.lineTo(cx + m, cy + 3);
+    ctx.stroke();
+  }
+  for(let m of [-20, 20]){
+    ctx.beginPath();
+    ctx.moveTo(cx - 3, cy + m); ctx.lineTo(cx + 3, cy + m);
+    ctx.stroke();
+  }
+
+  // Center dot
+  ctx.beginPath();
+  ctx.arc(cx, cy, 2, 0, Math.PI*2);
+  ctx.stroke();
+
+  // Corner brackets
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+  ctx.lineWidth = 1.5;
+  const pad = 14;
+  const blen = 16;
+  ctx.beginPath(); ctx.moveTo(pad, pad + blen); ctx.lineTo(pad, pad); ctx.lineTo(pad + blen, pad); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(w - pad - blen, pad); ctx.lineTo(w - pad, pad); ctx.lineTo(w - pad, pad + blen); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(pad, h - pad - blen); ctx.lineTo(pad, h - pad); ctx.lineTo(pad + blen, h - pad); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(w - pad - blen, h - pad); ctx.lineTo(w - pad, h - pad); ctx.lineTo(w - pad, h - pad - blen); ctx.stroke();
+
+  // Angle Readout in lower-right corner
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText('AZ: ' + pan.toFixed(1) + '°  EL: ' + (tilt>=0?'+':'') + tilt.toFixed(1) + '°  MAG: ' + zoom.toFixed(1) + 'x', w - pad - 6, h - pad - 8);
+
+  ctx.restore();
+}
+
+function ptzAnimationLoop(){
+  if(!activePTZChannel){
+    ptzCanvasAnimId = null;
+    return;
+  }
+
+  // Extrapolate motion smoothly if device is moving
+  if(ptzIsMoving && !ptzIsDragging){
+    const dt = 1.0 / 60.0;
+    if(ptzPanDir !== 0){
+      const degPerSec = (ptzPanSpeed / 255.0) * 60.0;
+      ptzTargetPan = normDeg(ptzTargetPan + ptzPanDir * degPerSec * dt);
+    }
+    if(ptzTiltDir !== 0){
+      const degPerSec = (ptzTiltSpeed / 255.0) * 30.0;
+      ptzTargetTilt = Math.max(-90, Math.min(90, ptzTargetTilt + ptzTiltDir * degPerSec * dt));
+    }
+    if(ptzZoomDir !== 0){
+      const ratePerSec = (ptzZoomSpeed / 15.0) * 2.0;
+      ptzTargetZoom = Math.max(1.0, Math.min(30.0, ptzTargetZoom + ptzZoomDir * ratePerSec * dt));
+    }
+  }
+
+  // Smooth lerp
+  ptzCurPan = lerpAngle(ptzCurPan, ptzTargetPan, 0.15);
+  ptzCurTilt = lerpVal(ptzCurTilt, ptzTargetTilt, 0.15);
+  ptzCurZoom = lerpVal(ptzCurZoom, ptzTargetZoom, 0.15);
+
+  drawPTZViewport();
+
+  // Update real-time timestamp on HUD
+  const now = new Date();
+  const timeStr = now.getFullYear() + '-' +
+    String(now.getMonth()+1).padStart(2, '0') + '-' +
+    String(now.getDate()).padStart(2, '0') + ' ' +
+    String(now.getHours()).padStart(2, '0') + ':' +
+    String(now.getMinutes()).padStart(2, '0') + ':' +
+    String(now.getSeconds()).padStart(2, '0') + '.' +
+    String(now.getMilliseconds()).padStart(3, '0');
+  const tEl = document.getElementById('ptzOsdTime');
+  if(tEl) tEl.textContent = timeStr;
+
+  ptzCanvasAnimId = requestAnimationFrame(ptzAnimationLoop);
+}
+
+function startPTZCanvasLoop(){
+  if(!ptzCanvasAnimId){
+    ptzCanvasAnimId = requestAnimationFrame(ptzAnimationLoop);
+  }
+}
+
+function stopPTZCanvasLoop(){
+  if(ptzCanvasAnimId){
+    cancelAnimationFrame(ptzCanvasAnimId);
+    ptzCanvasAnimId = null;
+  }
+}
+
+function initPTZCanvas(){
+  const canvas = document.getElementById('ptzViewportCanvas');
+  if(!canvas) return;
+
+  ptzAttachCanvasEvents();
+  startPTZCanvasLoop();
+}
+
+function ptzAttachCanvasEvents(){
+  if(ptzListenersAttached) return;
+  ptzListenersAttached = true;
+  const canvas = document.getElementById('ptzViewportCanvas');
+  if(!canvas) return;
+
+  canvas.addEventListener('mousedown', function(e){
+    ptzIsDragging = true;
+    ptzDragStartX = e.clientX;
+    ptzDragStartY = e.clientY;
+    ptzDragStartPan = ptzCurPan;
+    ptzDragStartTilt = ptzCurTilt;
+    canvas.style.cursor = 'grabbing';
+  });
+
+  window.addEventListener('mousemove', function(e){
+    if(!ptzIsDragging) return;
+    const dx = e.clientX - ptzDragStartX;
+    const dy = e.clientY - ptzDragStartY;
+    const baseFovH = 60.0;
+    const fovH = baseFovH / Math.max(1, ptzCurZoom);
+    const fovV = fovH * (270.0 / (canvas.clientWidth || 940));
+
+    const deltaPan = -(dx / (canvas.clientWidth || 940)) * fovH;
+    const deltaTilt = (dy / 270.0) * fovV;
+
+    let newPan = normDeg(ptzDragStartPan + deltaPan);
+    let newTilt = Math.max(-90, Math.min(90, ptzDragStartTilt + deltaTilt));
+
+    ptzCurPan = newPan;
+    ptzTargetPan = newPan;
+    ptzCurTilt = newTilt;
+    ptzTargetTilt = newTilt;
+
+    document.getElementById('ptzValPan').innerText = newPan.toFixed(1) + '°';
+    document.getElementById('ptzPanDir').innerText = formatCompassDir(newPan);
+    document.getElementById('ptzValTilt').innerText = (newTilt >= 0 ? '+' : '') + newTilt.toFixed(1) + '°';
+    document.getElementById('ptzTiltDir').innerText = formatTiltDir(newTilt);
+
+    if(ptzDragSyncTimer) clearTimeout(ptzDragSyncTimer);
+    ptzDragSyncTimer = setTimeout(function(){
+      syncPTZPoseToBackend(newPan, newTilt, ptzCurZoom);
+    }, 120);
+  });
+
+  window.addEventListener('mouseup', function(){
+    if(ptzIsDragging){
+      ptzIsDragging = false;
+      const cv = document.getElementById('ptzViewportCanvas');
+      if(cv) cv.style.cursor = 'grab';
+      syncPTZPoseToBackend(ptzCurPan, ptzCurTilt, ptzCurZoom);
+    }
+  });
+
+  canvas.addEventListener('wheel', function(e){
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.15 : 0.869;
+    let newZoom = Math.max(1.0, Math.min(30.0, ptzTargetZoom * factor));
+    newZoom = Math.round(newZoom * 10) / 10;
+    ptzTargetZoom = newZoom;
+    document.getElementById('ptzValZoom').innerText = newZoom.toFixed(1) + 'x';
+
+    if(ptzDragSyncTimer) clearTimeout(ptzDragSyncTimer);
+    ptzDragSyncTimer = setTimeout(function(){
+      syncPTZPoseToBackend(ptzCurPan, ptzCurTilt, newZoom);
+    }, 150);
+  }, { passive: false });
+}
+
+async function syncPTZPoseToBackend(pan, tilt, zoom){
+  if(!activeDeviceId || !activePTZChannel) return;
+  await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/ptz/control', 'POST', {
+    channelId: activePTZChannel,
+    action: 'set_pose',
+    pan: Math.round(pan * 10) / 10,
+    tilt: Math.round(tilt * 10) / 10,
+    zoom: Math.round(zoom * 10) / 10
+  });
+}
+
+function snapshotPTZCanvas(){
+  const canvas = document.getElementById('ptzViewportCanvas');
+  if(!canvas) return;
+  try {
+    const dataURL = canvas.toDataURL('image/png');
+    const a = document.createElement('a');
+    const d = new Date();
+    const ts = d.getFullYear() +
+      String(d.getMonth()+1).padStart(2,'0') +
+      String(d.getDate()).padStart(2,'0') + '_' +
+      String(d.getHours()).padStart(2,'0') +
+      String(d.getMinutes()).padStart(2,'0') +
+      String(d.getSeconds()).padStart(2,'0');
+    a.download = 'GB28181_Snapshot_' + (activePTZChannel || 'CAM') + '_' + ts + '.png';
+    a.href = dataURL;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    showToast('视口快照已成功抓拍并下载', 'success');
+  } catch(e) {
+    showToast('抓拍快照失败: ' + e.message, 'error');
+  }
+}
+
+async function resetPTZView(){
+  if(!activeDeviceId || !activePTZChannel) return;
+  ptzTargetPan = 0;
+  ptzTargetTilt = 0;
+  ptzTargetZoom = 1.0;
+  await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/ptz/control', 'POST', {
+    channelId: activePTZChannel,
+    action: 'reset'
+  });
+  showToast('云台已复位回正 (正北 0° 平视)', 'info');
+  await refreshPTZStatus();
+}
+
+function getActiveProfile(){
+  return (activeDeviceData && activeDeviceData.profile) ? activeDeviceData.profile : null;
+}
+
+function refreshPTZStreamBadge(channelId){
+  const d = getActiveProfile();
+  const chMedia = (d && d.media && d.media.channels && d.media.channels[channelId]) || {};
+  const curSrc = chMedia.source || (d && d.media && d.media.source) || 'mp4';
+  const el = document.getElementById('ptzStreamSourceBadge');
+  if(!el) return;
+  if(curSrc === 'ptz'){
+    el.className = 'badge live';
+    el.style.background = 'rgba(56, 189, 248, 0.2)';
+    el.style.borderColor = 'rgba(56, 189, 248, 0.6)';
+    el.style.color = '#38bdf8';
+    el.innerHTML = '⚡ 国标推流: 🕹️ PTZ虚拟流 (点播即动)';
+  } else {
+    el.className = 'badge';
+    el.style.background = 'rgba(100, 116, 139, 0.25)';
+    el.style.borderColor = 'rgba(100, 116, 139, 0.5)';
+    el.style.color = '#cbd5e1';
+    el.innerHTML = '📁 国标推流: ' + (curSrc==='synthetic'?'彩条流':'MP4录像') + ' (点击切为PTZ流)';
+  }
+}
+
+async function togglePTZChannelStreamSource(){
+  if(!activeDeviceId || !activePTZChannel) return;
+  const d = getActiveProfile();
+  if(!d) return;
+  const chMedia = (d.media && d.media.channels && d.media.channels[activePTZChannel]) || {};
+  const curSrc = chMedia.source || (d.media && d.media.source) || 'mp4';
+  const nextSrc = (curSrc === 'ptz') ? 'mp4' : 'ptz';
+
+  const body = {
+    channelId: activePTZChannel,
+    source: nextSrc
+  };
+  if(nextSrc === 'mp4' && d.media && d.media.mp4_file){
+    body.mp4 = d.media.mp4_file;
+  }
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/channels/bind', 'POST', body);
+  if(j && j.ok){
+    if(nextSrc === 'ptz'){
+      showToast('已切换为【🕹️ PTZ 3D虚拟全景流】，WVP 点播将随云台实时旋转！', 'success');
+    } else {
+      showToast('已恢复为【MP4 视频文件推流】', 'info');
+    }
+    await refreshAll();
+    refreshPTZStreamBadge(activePTZChannel);
+  }
+}
+
+async function openPTZModal(channelId, channelName){
+  activePTZChannel = channelId;
+  ptzFirstInit = true;
+  document.getElementById('ptzModalTitle').textContent = '通道云台姿态与预置位 · ' + (channelName || channelId);
+  document.getElementById('ptzModalSubtitle').textContent = '设备: ' + activeDeviceId + ' | 通道ID: ' + channelId;
+  const osdTag = document.getElementById('ptzCamOsdTag');
+  if(osdTag) osdTag.textContent = (channelName || channelId) + ' · 1080P@25FPS';
+  if(!activeDeviceData) await loadActiveDeviceDetail();
+  refreshPTZStreamBadge(channelId);
+  openModal('ptzModal');
+  initPTZCanvas();
+  await refreshPTZStatus();
+  if(ptzPollTimer) clearInterval(ptzPollTimer);
+  ptzPollTimer = setInterval(function(){
+    refreshPTZStatus();
+  }, 1000);
+}
+
+function closePTZModal(){
+  if(ptzPollTimer){
+    clearInterval(ptzPollTimer);
+    ptzPollTimer = null;
+  }
+  if(ptzFastPollTimer){
+    clearInterval(ptzFastPollTimer);
+    ptzFastPollTimer = null;
+  }
+  stopPTZCanvasLoop();
+  activePTZChannel = null;
+  closeModal('ptzModal');
+}
+
+async function refreshPTZStatus(){
+  if(!activeDeviceId || !activePTZChannel) return;
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/ptz?channel=' + encodeURIComponent(activePTZChannel));
+  if(!j) return;
+
+  const pan = j.pan || 0;
+  const tilt = j.tilt || 0;
+  const zoom = j.zoom || 1.0;
+
+  ptzTargetPan = pan;
+  ptzTargetTilt = tilt;
+  ptzTargetZoom = zoom;
+  ptzIsMoving = !!j.isMoving;
+  ptzPanDir = j.panDir || 0;
+  ptzTiltDir = j.tiltDir || 0;
+  ptzZoomDir = j.zoomDir || 0;
+  ptzPanSpeed = j.panSpeed || 64;
+  ptzTiltSpeed = j.tiltSpeed || 64;
+  ptzZoomSpeed = j.zoomSpeed || 4;
+
+  if(ptzFirstInit){
+    ptzCurPan = pan;
+    ptzCurTilt = tilt;
+    ptzCurZoom = zoom;
+    ptzFirstInit = false;
+  }
+
+  document.getElementById('ptzValPan').innerText = pan.toFixed(1) + '°';
+  document.getElementById('ptzPanDir').innerText = formatCompassDir(pan);
+
+  document.getElementById('ptzValTilt').innerText = (tilt >= 0 ? '+' : '') + tilt.toFixed(1) + '°';
+  document.getElementById('ptzTiltDir').innerText = formatTiltDir(tilt);
+
+  document.getElementById('ptzValZoom').innerText = zoom.toFixed(1) + 'x';
+
+  const badge = document.getElementById('ptzStatusBadge');
+  const text = document.getElementById('ptzStatusText');
+  if(j.isMoving){
+    badge.className = 'badge live';
+    text.innerText = j.statusDesc || '平滑转动中...';
+    if(!ptzFastPollTimer){
+      ptzFastPollTimer = setInterval(function(){
+        if(!ptzIsMoving){
+          clearInterval(ptzFastPollTimer);
+          ptzFastPollTimer = null;
+        } else {
+          refreshPTZStatus();
+        }
+      }, 250);
+    }
+  } else if(j.activePresetId > 0){
+    badge.className = 'badge on';
+    text.innerText = '停留在预置位 #' + j.activePresetId + ' (' + (j.activePreset || '') + ')';
+    if(ptzFastPollTimer){
+      clearInterval(ptzFastPollTimer);
+      ptzFastPollTimer = null;
+    }
+  } else {
+    badge.className = 'badge stopped';
+    text.innerText = '定格静止';
+    if(ptzFastPollTimer){
+      clearInterval(ptzFastPollTimer);
+      ptzFastPollTimer = null;
+    }
+  }
+
+  renderPTZPresets(j.presets || []);
+}
+
+function renderPTZPresets(presets){
+  const tbody = document.getElementById('ptzPresetTbody');
+  if(!presets.length){
+    tbody.innerHTML = '<tr><td colspan="4" style="padding:20px;text-align:center;color:var(--text-dim)">暂无预置位。点击上方按钮可将当前姿态添加为预置位。</td></tr>';
+    return;
+  }
+  tbody.innerHTML = presets.map(function(p){
+    return '<tr style="border-bottom:1px solid rgba(255,255,255,0.05)">' +
+      '<td style="padding:7px 8px;font-weight:700;color:var(--accent);font-family:var(--font-mono)">#' + p.id + '</td>' +
+      '<td style="padding:7px 8px;font-weight:600;color:#fff">' + esc(p.name) + '</td>' +
+      '<td style="padding:7px 8px;font-family:var(--font-mono);font-size:11px;color:var(--text-dim)">' +
+        p.pan.toFixed(1) + '° / ' + (p.tilt>=0?'+':'') + p.tilt.toFixed(1) + '° / ' + p.zoom.toFixed(1) + 'x' +
+      '</td>' +
+      '<td style="padding:7px 8px;text-align:right;white-space:nowrap">' +
+        '<button class="btn btn-sm btn-primary" style="padding:2px 8px;margin-right:6px" onclick="callPTZPreset(' + p.id + ')">调用</button>' +
+        '<button class="btn btn-sm btn-danger" style="padding:2px 8px" onclick="deletePTZPreset(' + p.id + ')">删除</button>' +
+      '</td>' +
+    '</tr>';
+  }).join('');
+}
+
+async function startPTZ(action){
+  if(!activeDeviceId || !activePTZChannel) return;
+  const spd = parseInt(document.getElementById('ptzSpeedSlider').value, 10) || 80;
+  const zSpd = Math.max(1, Math.min(15, Math.round(spd / 16)));
+  await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/ptz/control', 'POST', {
+    channelId: activePTZChannel,
+    action: action,
+    panSpeed: spd,
+    tiltSpeed: spd,
+    zoomSpeed: zSpd
+  });
+  refreshPTZStatus();
+}
+
+async function stopPTZ(){
+  if(!activeDeviceId || !activePTZChannel) return;
+  await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/ptz/control', 'POST', {
+    channelId: activePTZChannel,
+    action: 'stop'
+  });
+  refreshPTZStatus();
+}
+
+async function callPTZPreset(presetId){
+  if(!activeDeviceId || !activePTZChannel) return;
+  const res = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/ptz/preset/call', 'POST', {
+    channelId: activePTZChannel,
+    presetId: presetId
+  });
+  if(res){
+    showToast('正在平滑转动至预置位 #' + presetId, 'info');
+    refreshPTZStatus();
+  }
+}
+
+async function promptSaveCurrentPreset(){
+  if(!activeDeviceId || !activePTZChannel) return;
+  const idStr = prompt('请输入要保存的预置位编号 (1~255):', '1');
+  if(!idStr) return;
+  const id = parseInt(idStr.trim(), 10);
+  if(!id || id <= 0 || id > 255){
+    alert('预置位编号必须为 1~255 之间的正整数');
+    return;
+  }
+  const name = prompt('请输入预置位名称 (例如: 大门入口/全景监控):', '预置位' + id);
+  if(name === null) return;
+
+  const res = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/ptz/preset', 'POST', {
+    channelId: activePTZChannel,
+    presetId: id,
+    name: name.trim() || ('预置位' + id),
+    useCurrent: true
+  });
+  if(res){
+    showToast('预置位 #' + id + ' 已保存当前球机坐标', 'success');
+    refreshPTZStatus();
+  }
+}
+
+async function deletePTZPreset(presetId){
+  if(!activeDeviceId || !activePTZChannel) return;
+  if(!confirm('确定删除预置位 #' + presetId + ' 吗？')) return;
+  const res = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/ptz/preset?channel=' + encodeURIComponent(activePTZChannel) + '&presetId=' + presetId, 'DELETE');
+  if(res){
+    showToast('预置位 #' + presetId + ' 已删除', 'info');
+    refreshPTZStatus();
+  }
 }
 
 // Bootstrap

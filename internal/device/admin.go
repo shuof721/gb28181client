@@ -148,9 +148,9 @@ func (d *Device) BindChannelVideo(req BindChannelRequest) error {
 		source = "mp4"
 	}
 	switch source {
-	case "mp4", "file", "synthetic":
+	case "mp4", "file", "synthetic", "ptz":
 	default:
-		return fmt.Errorf("source 必须是 mp4/file/synthetic")
+		return fmt.Errorf("source 必须是 mp4/file/synthetic/ptz")
 	}
 
 	d.cfgLock()
@@ -171,9 +171,7 @@ func (d *Device) BindChannelVideo(req BindChannelRequest) error {
 		d.cfg.Media.Channels = map[string]config.ChannelMediaConfig{}
 	}
 	// 绑定即切到 per_channel，否则共享模式下改绑定无效
-	if source != "synthetic" || req.MP4 != "" || req.H264 != "" {
-		d.cfg.Media.Mode = "per_channel"
-	}
+	d.cfg.Media.Mode = "per_channel"
 
 	cfg := config.ChannelMediaConfig{Source: source}
 	if mp4 := normalizeVideoPath(req.MP4); mp4 != "" {
@@ -193,7 +191,6 @@ func (d *Device) BindChannelVideo(req BindChannelRequest) error {
 	}
 
 	d.cfg.Media.Channels[id] = cfg
-	d.cfgUnlock()
 	log.Printf("[ui] bind channel %s source=%s mp4=%s h264=%s", id, cfg.Source, cfg.MP4File, cfg.H264File)
 
 	// 若该通道正在播，停掉让下次点播用新源

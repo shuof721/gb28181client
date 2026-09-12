@@ -12,10 +12,10 @@
 | 心跳 | MANSCDP Keepalive，失败重试与超时重注册 |
 | 目录 | 响应 Catalog 查询（NVR + 多通道） |
 | 设备信息 | DeviceInfo / DeviceStatus |
-| 控制 | DeviceControl（PTZ 指令解析与日志） |
-| 查询 | RecordInfo（默认空列表） |
+| 控制 | DeviceControl（虚拟云台 PTZ 8方向/变倍/速度平滑运动状态机，预置位 0x81/0x82/0x83 设置/调用/删除） |
+| 查询 | RecordInfo 虚拟录像排程查询、PresetQuery 预置位列表查询 |
 | 报警 | 可主动发送 Alarm Notify |
-| 媒体 | INVITE 实时点播：SDP 应答 + H.264→PES→PS→RTP |
+| 媒体 | INVITE 实时点播与历史录像回放 (含 MANSRTSP 拖动 Seek 与倍速) |
 | 传输 | SIP UDP/TCP；媒体 RTP/UDP，以及 TCP 长度前缀 |
 
 ## 目录结构
@@ -150,17 +150,18 @@ media:
 
 - SIP 事务：REGISTER / MESSAGE / INVITE / BYE / INFO / OPTIONS / SUBSCRIBE
 - Digest：MD5 / MD5-sess / SHA-256，支持 qop=auth
-- MANSCDP：Catalog、DeviceInfo、DeviceStatus、DeviceControl、RecordInfo、Keepalive、Alarm
-- 实时点播：解析 `c=`/`m=`/`y=`，回 `sendonly` SDP（含 `y=` SSRC）
+- MANSCDP：Catalog、DeviceInfo、DeviceStatus、DeviceControl、PresetQuery、RecordInfo、Keepalive、Alarm
+- 实时点播与回放：解析 `c=`/`m=`/`y=`，回 `sendonly` SDP（含 `y=` SSRC），支持 MANSRTSP 拖动/倍速与结束通知 (121)
+- 虚拟云台与预置位：PTZ 8方向/变倍平滑运动仿真，支持 PresetQuery、Set(0x81)、Call(0x82)、Delete(0x83) 与 Web 可视化操控
 - PS：Pack Header + System Header + PSM(stream_type=0x1B) + PES(0xE0)
 - RTP：PT=96，SSRC 使用平台 `y=` 中的值
 
 ## 尚未覆盖 / 后续可做
 
-- 语音对讲（Talk）、文件下载、回放拖动（MANSRTSP INFO 全量）
-- 移动位置订阅、订阅通知（Catalog Subscribe → Notify）
+- 移动位置订阅与轨迹模拟 (MobilePosition 上报 / GPS)
+- 语音对讲（Talk）、PS 复合流音频封装 (G.711A/AAC)
+- 目录订阅与通道增量通知 (Catalog Subscribe → Notify)
 - TCP 媒体的 `0x24` interleaved 模式（当前为 2 字节长度前缀）
-- 录像计划、云台预置位/巡航的完整执行（目前仅解析日志）
 - 更严格的 SIP 事务层（重传定时器、CANCEL 等）
 
 ## 测试

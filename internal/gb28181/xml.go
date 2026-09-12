@@ -83,6 +83,7 @@ type CatalogItem struct {
 	Port         int    `xml:"Port,omitempty"`
 	Longitude    float64 `xml:"Longitude,omitempty"`
 	Latitude     float64 `xml:"Latitude,omitempty"`
+	PTZType      int     `xml:"PTZType,omitempty"`
 }
 
 type CatalogResp struct {
@@ -142,13 +143,24 @@ type DeviceStatusResp struct {
 
 // ----- DeviceControl (PTZ 等) -----
 
+type DragZoomParam struct {
+	Length    int `xml:"Length"`
+	Width     int `xml:"Width"`
+	MidPointX int `xml:"MidPointX"`
+	MidPointY int `xml:"MidPointY"`
+	LengthX   int `xml:"LengthX"`
+	LengthY   int `xml:"LengthY"`
+}
+
 type DeviceControlReq struct {
-	XMLName  xml.Name `xml:"Control"`
-	CmdType  string   `xml:"CmdType"`
-	SN       string   `xml:"SN"`
-	DeviceID string   `xml:"DeviceID"`
-	PTZCmd   string   `xml:"PTZCmd,omitempty"`
-	Info     struct {
+	XMLName     xml.Name       `xml:"Control"`
+	CmdType     string         `xml:"CmdType"`
+	SN          string         `xml:"SN"`
+	DeviceID    string         `xml:"DeviceID"`
+	PTZCmd      string         `xml:"PTZCmd,omitempty"`
+	DragZoomIn  *DragZoomParam `xml:"DragZoomIn,omitempty"`
+	DragZoomOut *DragZoomParam `xml:"DragZoomOut,omitempty"`
+	Info        struct {
 		ControlPriority string `xml:"ControlPriority,omitempty"`
 	} `xml:"Info,omitempty"`
 	// 雨刷/灯光等可扩展
@@ -231,6 +243,31 @@ type MediaStatusNotify struct {
 	NotifyType string   `xml:"NotifyType"` // 121: 历史媒体发送结束, 120: 媒体流已准备就绪
 }
 
+// ----- PresetQuery -----
+
+type PresetQueryReq struct {
+	XMLName  xml.Name `xml:"Query"`
+	CmdType  string   `xml:"CmdType"`
+	SN       string   `xml:"SN"`
+	DeviceID string   `xml:"DeviceID"`
+}
+
+type PresetItem struct {
+	PresetID   string `xml:"PresetID"`
+	PresetName string `xml:"PresetName"`
+}
+
+type PresetQueryResp struct {
+	XMLName    xml.Name `xml:"Response"`
+	CmdType    string   `xml:"CmdType"`
+	SN         string   `xml:"SN"`
+	DeviceID   string   `xml:"DeviceID"`
+	PresetList struct {
+		Num   int          `xml:"Num,attr"`
+		Items []PresetItem `xml:"Item"`
+	} `xml:"PresetList"`
+}
+
 // ----- DeviceConfig 等可按需扩展 -----
 
 func MarshalXML(v any) ([]byte, error) {
@@ -243,41 +280,15 @@ func MarshalXML(v any) ([]byte, error) {
 }
 
 // DecodePTZ 解析 GB28181 PTZCmd（A5 0F 01 ... 十六进制字符串）。
-// 返回 (panSpeed, tiltSpeed, zoom, actionName)
 func DecodePTZ(cmd string) string {
-	s := strings.TrimSpace(strings.ReplaceAll(cmd, " ", ""))
-	if len(s) < 16 {
+	parsed, err := ParsePTZCmd(cmd)
+	if err != nil {
 		return "unknown"
 	}
-	// 取 byte3 高4位为指令
-	b, err := hexDecode(s)
-	if err != nil || len(b) < 8 {
-		return "unknown"
+	if parsed.Description != "" {
+		return parsed.Description
 	}
-	b3 := b[2]
-	switch b3 >> 4 {
-	case 0x0:
-		return "stop"
-	case 0x1:
-		if b3&0x0F == 0x0 {
-			return "right"
-		}
-		return "left"
-	case 0x2:
-		return "down/up"
-	case 0x3:
-		return "zoom-in"
-	case 0x4:
-		return "zoom-out"
-	case 0x8:
-		return "preset-set"
-	case 0x9:
-		return "preset-call"
-	case 0xC:
-		return "preset-delete"
-	default:
-		return fmt.Sprintf("ptz-0x%02X", b3)
-	}
+	return string(parsed.Action)
 }
 
 func hexDecode(s string) ([]byte, error) {

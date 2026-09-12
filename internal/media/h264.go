@@ -605,12 +605,14 @@ func (w *bitWriter) bytes() []byte {
 
 // SourceOptions 媒体源参数。
 type SourceOptions struct {
-	Kind   string
-	H264   string
-	MP4    string
-	Width  int
-	Height int
-	FPS    int
+	Kind      string
+	H264      string
+	MP4       string
+	Width     int
+	Height    int
+	FPS       int
+	ChannelID string
+	GetPTZ    func() PTZInfo
 }
 
 // NewSource 按配置创建源。
@@ -620,9 +622,17 @@ func NewSource(opts SourceOptions) (H264Source, error) {
 		return NewFileSource(opts.H264)
 	case "mp4":
 		return NewMP4Source(opts.MP4)
+	case "ptz", "ptz-synthetic", "ptz_synthetic":
+		return NewPTZSource(PTZSourceOptions{
+			ChannelID: opts.ChannelID,
+			Width:     opts.Width,
+			Height:    opts.Height,
+			FPS:       opts.FPS,
+			GetPTZ:    opts.GetPTZ,
+		})
 	case "synthetic", "":
 		return NewSyntheticSource(opts.Width, opts.Height, opts.FPS)
 	default:
-		return nil, fmt.Errorf("unknown media source %q (want file/mp4/synthetic)", opts.Kind)
+		return nil, fmt.Errorf("unknown media source %q (want file/mp4/synthetic/ptz)", opts.Kind)
 	}
 }

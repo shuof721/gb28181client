@@ -13,6 +13,7 @@ import (
 
 	"github.com/local/gb28181-device/internal/config"
 	"github.com/local/gb28181-device/internal/device"
+	"github.com/local/gb28181-device/internal/gb28181"
 )
 
 const maxUploadBytes = 512 << 20 // 512MB
@@ -156,6 +157,23 @@ func (s *Server) handleDeviceDispatch(w http.ResponseWriter, r *http.Request) {
 		}
 	case "records":
 		s.handleDeviceRecords(w, r, id)
+	case "ptz":
+		if len(parts) >= 3 {
+			switch parts[2] {
+			case "control":
+				s.handleDevicePTZControl(w, r, id)
+			case "preset":
+				if len(parts) >= 4 && parts[3] == "call" {
+					s.handleDevicePTZCallPreset(w, r, id)
+				} else {
+					s.handleDevicePTZPreset(w, r, id)
+				}
+			default:
+				writeErr(w, 404, "Not found")
+			}
+		} else {
+			s.handleDevicePTZStatus(w, r, id)
+		}
 	default:
 		writeErr(w, 404, "Unknown device action")
 	}
@@ -493,6 +511,225 @@ func (s *Server) handleDeviceRecords(w http.ResponseWriter, r *http.Request, id 
 		"total":   len(records),
 		"config":  md.Profile.Record,
 	})
+}
+
+func (s *Server) handleDevicePTZStatus(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		writeErr(w, 405, "GET only")
+		return
+	}
+	md, err := s.mgr.Get(id)
+	if err != nil {
+		writeErr(w, 404, err.Error())
+		return
+	}
+	if !md.Running || md.Dev == nil {
+		writeErr(w, 400, "设备未运行")
+		return
+	}
+
+	channelID := r.URL.Query().Get("channel")
+	if channelID == "" {
+		if len(md.Profile.Device.Channels) > 0 {
+			channelID = md.Profile.Device.Channels[0].ID
+		} else {
+			channelID = md.Profile.Device.ID
+		}
+	}
+
+	ptz := md.Dev.GetChannelPTZ(channelID)
+	writeJSON(w, 200, ptz.Status())
+}
+
+func (s *Server) handleDevicePTZControl(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	md, err := s.mgr.Get(id)
+	if err != nil {
+		writeErr(w, 404, err.Error())
+		return
+	}
+	if !md.Running || md.Dev == nil {
+		writeErr(w, 400, "设备未运行")
+		return
+	}
+
+	var req struct {
+		ChannelID string   `json:"channelId"`
+		Action    string   `json:"action"`
+		PanSpeed  int      `json:"panSpeed"`
+		TiltSpeed int      `json:"tiltSpeed"`
+		ZoomSpeed int      `json:"zoomSpeed"`
+		RawHex    string   `json:"rawHex"`
+		Pan       *float64 `json:"pan"`
+		Tilt      *float64 `json:"tilt"`
+		Zoom      *float64 `json:"zoom"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, "无效请求体: "+err.Error())
+		return
+	}
+
+	channelID := req.ChannelID
+	if channelID == "" {
+		if len(md.Profile.Device.Channels) > 0 {
+			channelID = md.Profile.Device.Channels[0].ID
+		} else {
+			channelID = md.Profile.Device.ID
+		}
+	}
+
+	ptz := md.Dev.GetChannelPTZ(channelID)
+	if req.RawHex != "" {
+		ptzCmd, err := gb28181.ParsePTZCmd(req.RawHex)
+		if err != nil {
+			writeErr(w, 400, "无效 PTZ 十六进制指令: "+err.Error())
+			return
+		}
+		st, err := ptz.ExecuteCommand(ptzCmd)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, st)
+		return
+	}
+
+	if req.Action == "set_pose" && req.Pan != nil {
+		tilt := 0.0
+		zoom := 1.0
+		if req.Tilt != nil {
+			tilt = *req.Tilt
+		}
+		if req.Zoom != nil {
+			zoom = *req.Zoom
+		}
+		st := ptz.SetPose(*req.Pan, tilt, zoom)
+		writeJSON(w, 200, st)
+		return
+	}
+
+	st := ptz.ManualControl(req.Action, req.PanSpeed, req.TiltSpeed, req.ZoomSpeed)
+	writeJSON(w, 200, st)
+}
+
+func (s *Server) handleDevicePTZPreset(w http.ResponseWriter, r *http.Request, id string) {
+	md, err := s.mgr.Get(id)
+	if err != nil {
+		writeErr(w, 404, err.Error())
+		return
+	}
+	if !md.Running || md.Dev == nil {
+		writeErr(w, 400, "设备未运行")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		channelID := r.URL.Query().Get("channel")
+		if channelID == "" && len(md.Profile.Device.Channels) > 0 {
+			channelID = md.Profile.Device.Channels[0].ID
+		}
+		ptz := md.Dev.GetChannelPTZ(channelID)
+		writeJSON(w, 200, ptz.Status())
+
+	case http.MethodPost:
+		var req struct {
+			ChannelID  string  `json:"channelId"`
+			PresetID   int     `json:"presetId"`
+			Name       string  `json:"name"`
+			Pan        float64 `json:"pan"`
+			Tilt       float64 `json:"tilt"`
+			Zoom       float64 `json:"zoom"`
+			UseCurrent bool    `json:"useCurrent"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, 400, "无效请求体: "+err.Error())
+			return
+		}
+		channelID := req.ChannelID
+		if channelID == "" && len(md.Profile.Device.Channels) > 0 {
+			channelID = md.Profile.Device.Channels[0].ID
+		}
+		ptz := md.Dev.GetChannelPTZ(channelID)
+		st, err := ptz.SetPreset(req.PresetID, req.Name, req.Pan, req.Tilt, req.Zoom, req.UseCurrent)
+		if err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, 200, st)
+
+	case http.MethodDelete:
+		channelID := r.URL.Query().Get("channel")
+		if channelID == "" && len(md.Profile.Device.Channels) > 0 {
+			channelID = md.Profile.Device.Channels[0].ID
+		}
+		presetIDStr := r.URL.Query().Get("presetId")
+		presetID, _ := strconv.Atoi(presetIDStr)
+		if presetID <= 0 {
+			var req struct {
+				ChannelID string `json:"channelId"`
+				PresetID  int    `json:"presetId"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if req.ChannelID != "" {
+				channelID = req.ChannelID
+			}
+			presetID = req.PresetID
+		}
+		if presetID <= 0 {
+			writeErr(w, 400, "缺少有效 presetId 参数")
+			return
+		}
+		ptz := md.Dev.GetChannelPTZ(channelID)
+		st, err := ptz.DeletePreset(presetID)
+		if err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, 200, st)
+
+	default:
+		writeErr(w, 405, "Method not allowed")
+	}
+}
+
+func (s *Server) handleDevicePTZCallPreset(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	md, err := s.mgr.Get(id)
+	if err != nil {
+		writeErr(w, 404, err.Error())
+		return
+	}
+	if !md.Running || md.Dev == nil {
+		writeErr(w, 400, "设备未运行")
+		return
+	}
+
+	var req struct {
+		ChannelID string `json:"channelId"`
+		PresetID  int    `json:"presetId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, "无效请求体: "+err.Error())
+		return
+	}
+	channelID := req.ChannelID
+	if channelID == "" && len(md.Profile.Device.Channels) > 0 {
+		channelID = md.Profile.Device.Channels[0].ID
+	}
+	ptz := md.Dev.GetChannelPTZ(channelID)
+	st, err := ptz.CallPreset(req.PresetID)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, st)
 }
 
 func (s *Server) handleChannelAdd(w http.ResponseWriter, r *http.Request, id string) {

@@ -3,6 +3,7 @@ package device
 import (
 	"os"
 	"testing"
+	"time"
 
 	"github.com/local/gb28181-device/internal/config"
 	"github.com/local/gb28181-device/internal/storage"
@@ -99,3 +100,74 @@ func TestManagerPortAndCRUD(t *testing.T) {
 		t.Fatalf("expected 1 device, got %d", len(list))
 	}
 }
+
+func TestManagerLiveBindAndShutdown(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "gb-mgr-live-*")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	store := storage.New(tempDir)
+	mgr := NewManager(store)
+	if err := mgr.Init(); err != nil {
+		t.Fatalf("init error: %v", err)
+	}
+
+	dev := &config.DeviceProfile{
+		Enabled: true,
+		SIP: config.SIPConfig{
+			ServerIP:   "127.0.0.1",
+			ServerPort: 5060,
+			LocalIP:    "127.0.0.1",
+			LocalPort:  5170,
+			Transport:  "udp",
+			Password:   "123456",
+		},
+		Device: config.DeviceConfig{
+			ID:   "34020000001180000003",
+			Name: "NVR-Live",
+			Channels: []config.ChannelConfig{
+				{ID: "34020000001320000001", Name: "IPC-1"},
+			},
+		},
+	}
+
+	if err := mgr.AddDevice(dev); err != nil {
+		t.Fatalf("add dev: %v", err)
+	}
+
+	// 模拟运行态绑定视频源（触发 OnConfigChanged），验证绝不自死锁
+	doneCh := make(chan error, 1)
+	go func() {
+		err := mgr.BindChannelVideo("34020000001180000003", BindChannelRequest{
+			ChannelID: "34020000001320000001",
+			Source:    "ptz",
+		})
+		doneCh <- err
+	}()
+
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("BindChannelVideo error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("BindChannelVideo deadlocked!")
+	}
+
+	// 验证秒级退出
+	stopDone := make(chan struct{})
+	go func() {
+		mgr.StopAll()
+		close(stopDone)
+	}()
+
+	select {
+	case <-stopDone:
+		// 成功退出
+	case <-time.After(2 * time.Second):
+		t.Fatalf("StopAll deadlocked or took too long!")
+	}
+}
+

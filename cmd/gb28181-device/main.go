@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/local/gb28181-device/internal/config"
 	"github.com/local/gb28181-device/internal/device"
@@ -87,10 +88,25 @@ func main() {
 	}()
 
 	// 5. 监听退出信号
-	sig := make(chan os.Signal, 1)
+	sig := make(chan os.Signal, 2)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	<-sig
 	log.Printf("shutting down all devices...")
+
+	// 退出安全网 1：若用户再次发送中断信号 (Ctrl+C)，立即强制退出
+	go func() {
+		<-sig
+		log.Printf("forced exit by second interrupt signal")
+		os.Exit(1)
+	}()
+
+	// 退出安全网 2：若 3 秒内未完成退出，强制退出
+	go func() {
+		time.Sleep(3 * time.Second)
+		log.Printf("shutdown timed out (3s), forcing exit...")
+		os.Exit(0)
+	}()
+
 	mgr.StopAll()
 	log.Printf("bye")
 }

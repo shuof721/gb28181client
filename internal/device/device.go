@@ -31,6 +31,9 @@ type Device struct {
 	startedAt time.Time
 	logs      *LogBuffer
 
+	ptzMu  sync.RWMutex
+	ptzMap map[string]*ChannelPTZ
+
 	OnConfigChanged func(cfg *config.Config)
 }
 
@@ -46,6 +49,7 @@ func New(cfg *config.Config) *Device {
 		ua:     ua,
 		stopCh: make(chan struct{}),
 		logs:   NewLogBuffer(800),
+		ptzMap: make(map[string]*ChannelPTZ),
 	}
 	srcFactory := func(channelID string) (media.H264Source, error) {
 		d.cfgRLock()
@@ -53,13 +57,34 @@ func New(cfg *config.Config) *Device {
 		d.cfgRUnlock()
 		log.Printf("[media] channel %s source=%s mp4=%s h264=%s",
 			channelID, v.Kind, v.MP4, v.H264)
+		var getPTZ func() media.PTZInfo
+		ptz := d.GetChannelPTZ(channelID)
+		if ptz != nil {
+			getPTZ = func() media.PTZInfo {
+				st := ptz.Status()
+				return media.PTZInfo{
+					Pan:            st.Pan,
+					Tilt:           st.Tilt,
+					Zoom:           st.Zoom,
+					Focus:          st.Focus,
+					Iris:           st.Iris,
+					IsMoving:       st.IsMoving,
+					ActivePresetID: st.ActivePresetID,
+					ActivePreset:   st.ActivePreset,
+					StatusDesc:     st.StatusDesc,
+				}
+			}
+		}
+
 		return media.NewSource(media.SourceOptions{
-			Kind:   v.Kind,
-			H264:   v.H264,
-			MP4:    v.MP4,
-			Width:  v.Width,
-			Height: v.Height,
-			FPS:    v.FPS,
+			Kind:      v.Kind,
+			H264:      v.H264,
+			MP4:       v.MP4,
+			Width:     v.Width,
+			Height:    v.Height,
+			FPS:       v.FPS,
+			ChannelID: channelID,
+			GetPTZ:    getPTZ,
 		})
 	}
 	d.ms = media.NewSessionManager(cfg.Media.LocalIP, cfg.Media.FPS, cfg.Media.RTPPayloadMax, srcFactory)
@@ -103,8 +128,23 @@ func (d *Device) Stop() {
 	}
 	close(d.stopCh)
 	d.ms.StopAll()
-	_ = d.ua.Unregister()
-	d.ua.Close()
+
+	// 优雅注销：Best-effort，最多等 1 秒；网络异常或无响应时直接超时退出
+	if d.ua != nil && d.ua.IsRegistered() {
+		unregDone := make(chan struct{})
+		go func() {
+			_ = d.ua.Unregister()
+			close(unregDone)
+		}()
+		select {
+		case <-unregDone:
+		case <-time.After(1 * time.Second):
+			log.Printf("[device] %s unregister timed out (1s), closing immediately", d.cfg.Device.ID)
+		}
+	}
+	if d.ua != nil {
+		d.ua.Close()
+	}
 }
 
 func (d *Device) Status() Status {
@@ -170,6 +210,48 @@ func (d *Device) KeepaliveNow() error {
 
 func (d *Device) StopSession(callID string) {
 	d.ms.StopByCallID(callID)
+}
+
+// GetChannelPTZ 获取或初始化指定通道的虚拟云台控制器。
+func (d *Device) GetChannelPTZ(channelID string) *ChannelPTZ {
+	d.ptzMu.Lock()
+	defer d.ptzMu.Unlock()
+
+	if p, ok := d.ptzMap[channelID]; ok {
+		return p
+	}
+
+	d.cfgRLock()
+	var ptzCfg *config.PTZConfig
+	for _, ch := range d.cfg.Device.Channels {
+		if ch.ID == channelID {
+			ptzCfg = ch.PTZ
+			break
+		}
+	}
+	d.cfgRUnlock()
+
+	if ptzCfg == nil {
+		ptzCfg = config.DefaultPTZConfig()
+	}
+
+	onChange := func(chID string, latest *config.PTZConfig) {
+		d.cfgLock()
+		for i := range d.cfg.Device.Channels {
+			if d.cfg.Device.Channels[i].ID == chID {
+				d.cfg.Device.Channels[i].PTZ = latest
+				break
+			}
+		}
+		d.cfgUnlock()
+		if d.OnConfigChanged != nil {
+			d.OnConfigChanged(d.cfg)
+		}
+	}
+
+	p := NewChannelPTZ(channelID, ptzCfg, onChange)
+	d.ptzMap[channelID] = p
+	return p
 }
 
 func (d *Device) Logs(n int) []string {
@@ -366,6 +448,8 @@ func (d *Device) handleMANSCDP(root *gb28181.Root, m *sip.Message, src net.Addr)
 		d.respDeviceStatus(root, m, src)
 	case "devicecontrol":
 		d.onDeviceControl(root, m, src)
+	case "presetquery":
+		d.respPresetQuery(root, m, src)
 	case "recordinfo":
 		d.respRecordInfo(root, m, src)
 	case "configdownload":
@@ -432,6 +516,10 @@ func (d *Device) respCatalog(root *gb28181.Root, req *sip.Message, src net.Addr)
 	d.cfgRLock()
 	items := make([]gb28181.CatalogItem, 0, len(d.cfg.Device.Channels))
 	for _, ch := range d.cfg.Device.Channels {
+		ptzType := ch.PTZType
+		if ptzType == 0 {
+			ptzType = 1 // 默认作为球机 (支持 PTZ 控制)
+		}
 		items = append(items, gb28181.CatalogItem{
 			DeviceID:     ch.ID,
 			Name:         ch.Name,
@@ -446,6 +534,7 @@ func (d *Device) respCatalog(root *gb28181.Root, req *sip.Message, src net.Addr)
 			RegisterWay:  ch.RegisterWay,
 			Secrecy:      ch.Secrecy,
 			Status:       ch.Status,
+			PTZType:      ptzType,
 		})
 	}
 	d.cfgRUnlock()
@@ -471,6 +560,9 @@ func (d *Device) respCatalog(root *gb28181.Root, req *sip.Message, src net.Addr)
 		fmt.Fprintf(&listB, "      <RegisterWay>%d</RegisterWay>\r\n", it.RegisterWay)
 		fmt.Fprintf(&listB, "      <Secrecy>%d</Secrecy>\r\n", it.Secrecy)
 		fmt.Fprintf(&listB, "      <Status>%s</Status>\r\n", it.Status)
+		if it.PTZType > 0 {
+			fmt.Fprintf(&listB, "      <PTZType>%d</PTZType>\r\n", it.PTZType)
+		}
 		listB.WriteString("    </Item>\r\n")
 	}
 	listB.WriteString("  </DeviceList>\r\n")
@@ -532,10 +624,80 @@ func (d *Device) onDeviceControl(root *gb28181.Root, req *sip.Message, src net.A
 	if err := unmarshalBody(req.Body, &ctrl); err != nil {
 		log.Printf("[gb] devicecontrol parse: %v", err)
 	}
-	action := gb28181.DecodePTZ(ctrl.PTZCmd)
-	log.Printf("[gb] DeviceControl CmdType=%s DeviceID=%s PTZ=%s => %s",
-		root.CmdType, root.DeviceID, ctrl.PTZCmd, action)
+
+	channelID := root.DeviceID
+	if channelID == "" {
+		channelID = d.cfg.Device.ID
+	}
+
+	if ctrl.PTZCmd != "" {
+		ptzCmd, err := gb28181.ParsePTZCmd(ctrl.PTZCmd)
+		if err != nil {
+			log.Printf("[gb] DeviceControl parse PTZCmd '%s' failed: %v", ctrl.PTZCmd, err)
+		} else {
+			ptz := d.GetChannelPTZ(channelID)
+			st, execErr := ptz.ExecuteCommand(ptzCmd)
+			if execErr != nil {
+				log.Printf("[gb] PTZ execute error on %s: %v", channelID, execErr)
+			} else {
+				log.Printf("[gb] PTZ %s on %s => action=%s (%s), current pos (pan=%.1f° tilt=%.1f° zoom=%.1fx focus=%.0f%% iris=%.0f%%)",
+					ctrl.PTZCmd, channelID, ptzCmd.Action, ptzCmd.Description, st.Pan, st.Tilt, st.Zoom, st.Focus, st.Iris)
+			}
+		}
+	} else if ctrl.DragZoomIn != nil {
+		dz := ctrl.DragZoomIn
+		ptz := d.GetChannelPTZ(channelID)
+		st := ptz.DragZoom(true, dz.Length, dz.Width, dz.MidPointX, dz.MidPointY, dz.LengthX, dz.LengthY)
+		log.Printf("[gb] DragZoomIn on %s => window(%dx%d) center(%d,%d) box(%dx%d) => target (pan=%.1f° tilt=%.1f° zoom=%.1fx)",
+			channelID, dz.Length, dz.Width, dz.MidPointX, dz.MidPointY, dz.LengthX, dz.LengthY, st.Pan, st.Tilt, st.Zoom)
+	} else if ctrl.DragZoomOut != nil {
+		dz := ctrl.DragZoomOut
+		ptz := d.GetChannelPTZ(channelID)
+		st := ptz.DragZoom(false, dz.Length, dz.Width, dz.MidPointX, dz.MidPointY, dz.LengthX, dz.LengthY)
+		log.Printf("[gb] DragZoomOut on %s => window(%dx%d) center(%d,%d) box(%dx%d) => target (pan=%.1f° tilt=%.1f° zoom=%.1fx)",
+			channelID, dz.Length, dz.Width, dz.MidPointX, dz.MidPointY, dz.LengthX, dz.LengthY, st.Pan, st.Tilt, st.Zoom)
+	} else {
+		log.Printf("[gb] DeviceControl CmdType=%s DeviceID=%s", root.CmdType, root.DeviceID)
+	}
 	// 控制类一般无需 MESSAGE 回业务响应，仅 SIP 200（已在 onMessage 回过）
+}
+
+func (d *Device) respPresetQuery(root *gb28181.Root, req *sip.Message, src net.Addr) {
+	var query gb28181.PresetQueryReq
+	if err := unmarshalBody(req.Body, &query); err != nil {
+		log.Printf("[gb] presetquery parse query failed: %v", err)
+	}
+
+	channelID := root.DeviceID
+	if query.DeviceID != "" {
+		channelID = query.DeviceID
+	}
+	ptz := d.GetChannelPTZ(channelID)
+	prs := ptz.PresetsList()
+
+	resp := gb28181.PresetQueryResp{
+		CmdType:  "PresetQuery",
+		SN:       root.SN,
+		DeviceID: channelID,
+	}
+	resp.PresetList.Num = len(prs)
+	for _, pr := range prs {
+		resp.PresetList.Items = append(resp.PresetList.Items, gb28181.PresetItem{
+			PresetID:   strconv.Itoa(pr.ID),
+			PresetName: pr.Name,
+		})
+	}
+
+	body, err := gb28181.MarshalXML(&resp)
+	if err != nil {
+		log.Printf("[gb] marshal presetquery response failed: %v", err)
+		return
+	}
+	if _, err := d.ua.SendMessage(body, "Application/MANSCDP+xml"); err != nil {
+		log.Printf("[gb] presetquery response failed: %v", err)
+	} else {
+		log.Printf("[gb] presetquery response sent for %s, presets=%d", channelID, len(prs))
+	}
 }
 
 func (d *Device) respRecordInfo(root *gb28181.Root, req *sip.Message, src net.Addr) {
@@ -693,14 +855,16 @@ func (d *Device) onInvite(m *sip.Message, src net.Addr) {
 	resp.SetHeader("Call-ID", m.CallID())
 	resp.SetHeader("CSeq", m.GetHeader("CSeq"))
 	resp.SetHeader("User-Agent", "GB28181-SimDevice/1.0")
-	resp.SetHeader("Contact", fmt.Sprintf("<sip:%s@%s:%d>", d.cfg.Device.ID, d.cfg.SIP.LocalIP, d.cfg.SIP.LocalPort))
+	resp.SetHeader("Contact", d.ua.ContactURI())
 	resp.SetHeader("Content-Type", "Application/SDP")
 	resp.Body = []byte(answer)
 	resp.SetHeader("Content-Length", strconv.Itoa(len(resp.Body)))
 
-	if err := d.ua.SendRaw(src.String(), resp); err != nil {
+	if err := d.ua.SendResponse(src, resp); err != nil {
 		log.Printf("[media] send INVITE 200 failed: %v", err)
 		d.ms.StopByCallID(callID)
+	} else {
+		log.Printf("[media] INVITE 200 OK sent to %s ch=%s", src.String(), channelID)
 	}
 }
 

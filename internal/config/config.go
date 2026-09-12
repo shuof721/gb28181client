@@ -111,7 +111,42 @@ type ChannelConfig struct {
 	SafetyWay    int    `yaml:"safety_way" json:"safety_way"`
 	RegisterWay  int    `yaml:"register_way" json:"register_way"`
 	Secrecy      int    `yaml:"secrecy" json:"secrecy"`
-	CivilCode    string `yaml:"civil_code" json:"civil_code"`
+	CivilCode    string     `yaml:"civil_code" json:"civil_code"`
+	PTZType      int        `yaml:"ptz_type,omitempty" json:"ptz_type,omitempty"` // 1: 球机, 2: 半球, 3: 固定枪机, 4: 遥控枪机
+	PTZ          *PTZConfig `yaml:"ptz,omitempty" json:"ptz,omitempty"`
+}
+
+// PTZPreset 预置位配置。
+type PTZPreset struct {
+	ID   int     `yaml:"id" json:"id"`
+	Name string  `yaml:"name" json:"name"`
+	Pan  float64 `yaml:"pan" json:"pan"`   // 水平角度 0.0 ~ 360.0°
+	Tilt float64 `yaml:"tilt" json:"tilt"` // 垂直角度 -90.0 ~ +90.0°
+	Zoom float64 `yaml:"zoom" json:"zoom"` // 变倍倍率 1.0 ~ 30.0x
+}
+
+// PTZConfig 云台配置。
+type PTZConfig struct {
+	Enabled bool        `yaml:"enabled" json:"enabled"`
+	Pan     float64     `yaml:"pan" json:"pan"`
+	Tilt    float64     `yaml:"tilt" json:"tilt"`
+	Zoom    float64     `yaml:"zoom" json:"zoom"`
+	Presets []PTZPreset `yaml:"presets" json:"presets"`
+}
+
+// DefaultPTZConfig 返回默认初始预置位配置。
+func DefaultPTZConfig() *PTZConfig {
+	return &PTZConfig{
+		Enabled: true,
+		Pan:     0.0,
+		Tilt:    0.0,
+		Zoom:    1.0,
+		Presets: []PTZPreset{
+			{ID: 1, Name: "大门全景", Pan: 0.0, Tilt: 0.0, Zoom: 1.0},
+			{ID: 2, Name: "主干道", Pan: 90.0, Tilt: -10.0, Zoom: 2.5},
+			{ID: 3, Name: "周界巡查", Pan: 220.0, Tilt: 15.0, Zoom: 1.5},
+		},
+	}
 }
 
 type MediaConfig struct {

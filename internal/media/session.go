@@ -101,7 +101,8 @@ func BuildAnswerSDP(deviceID, channelID, localIP string, ssrc string, recv *SDPI
 		et := firstNonEmpty(recv.EndTime, "0")
 		tLine = fmt.Sprintf("t=%s %s", st, et)
 	}
-	port := 0
+	// 端口必须为有效非 0 端口（0 代表拒绝媒体流）
+	port := 15060
 	proto := "RTP/AVP"
 	if recv.IsTCP {
 		proto = "TCP/RTP/AVP"
@@ -117,7 +118,12 @@ func BuildAnswerSDP(deviceID, channelID, localIP string, ssrc string, recv *SDPI
 	fmt.Fprintf(&b, "%s\r\n", tLine)
 	fmt.Fprintf(&b, "m=video %d %s 96\r\n", port, proto)
 	if recv.IsTCP {
-		fmt.Fprintf(&b, "a=setup:passive\r\n")
+		// RFC 4145: 若接收端（WVP/ZLM）是 passive，推流端应设为 active；若对端是 active，本端设为 passive
+		if recv.TCPMode == "active" {
+			fmt.Fprintf(&b, "a=setup:passive\r\n")
+		} else {
+			fmt.Fprintf(&b, "a=setup:active\r\n")
+		}
 		fmt.Fprintf(&b, "a=connection:new\r\n")
 	}
 	fmt.Fprintf(&b, "a=sendonly\r\n")
@@ -342,13 +348,6 @@ func (m *SessionManager) StartSession(channelID, callID string, recv *SDPInfo, s
 		s.currentOffset.Store(int64(initialOffset * 1000))
 	}
 
-	if recv.IsTCP {
-		if err := s.dialTCP(); err != nil {
-			m.mu.Unlock()
-			return "", err
-		}
-	}
-
 	m.sessions[callID] = s
 	if streamType == "live" {
 		m.byChan[channelID] = s
@@ -471,14 +470,23 @@ func (m *SessionManager) remove(s *Session) {
 }
 
 func (s *Session) dialTCP() error {
-	// GB28181 TCP 被动：设备连接平台 media 端口
 	addr := net.JoinHostPort(s.remoteIP, strconv.Itoa(s.remotePort))
-	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
-	if err != nil {
-		return err
+	var lastErr error
+	for i := 0; i < 5; i++ {
+		select {
+		case <-s.stopCh:
+			return fmt.Errorf("session stopped")
+		default:
+		}
+		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+		if err == nil {
+			s.tcpConn = conn
+			return nil
+		}
+		lastErr = err
+		time.Sleep(200 * time.Millisecond)
 	}
-	s.tcpConn = conn
-	return nil
+	return lastErr
 }
 
 func (s *Session) Stop() {
@@ -507,6 +515,15 @@ func (s *Session) loop() {
 		wallClock = uint64(s.initialOffset * 90000)
 	}
 	var lastFrameTime time.Time
+
+	// 若为 TCP 推流，异步自适应连接对端媒体服务器
+	if s.isTCP {
+		if err := s.dialTCP(); err != nil {
+			log.Printf("[media] dial TCP media server failed %s:%d: %v", s.remoteIP, s.remotePort, err)
+			return
+		}
+		log.Printf("[media] TCP media connection established to %s:%d", s.remoteIP, s.remotePort)
+	}
 
 	// 先加载/抽流（可能耗时），期间不阻塞 SIP 200 OK
 	if s.factory != nil {
@@ -544,6 +561,7 @@ func (s *Session) loop() {
 				return
 			}
 		}
+		_ = c.SetWriteBuffer(4 * 1024 * 1024)
 		udp = c
 		defer udp.Close()
 	}
@@ -637,7 +655,7 @@ func (s *Session) loop() {
 		pkts := RTPPacketizePS(ps, s.ssrcNum, &s.seq, rtpTS, 96, s.payload)
 		wallClock += uint64(90000 / s.fps)
 		s.currentOffset.Add(int64(1000 / s.fps))
-		for _, pkt := range pkts {
+		for i, pkt := range pkts {
 			s.packetsSent.Add(1)
 			s.bytesSent.Add(uint64(len(pkt)))
 			if s.isTCP {
@@ -654,6 +672,10 @@ func (s *Session) loop() {
 				if _, err := udp.WriteToUDP(pkt, raddr); err != nil {
 					log.Printf("[media] udp write error: %v", err)
 					return
+				}
+				// 每发送 16 个 UDP 包（约 20KB）微休眠 50 微秒，平滑突发峰值，杜绝下半部分宏块丢包
+				if (i+1)%16 == 0 {
+					time.Sleep(50 * time.Microsecond)
 				}
 			}
 		}

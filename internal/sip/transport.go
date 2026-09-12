@@ -183,6 +183,22 @@ func (t *TCPTransport) readLoop(conn net.Conn, key string, h Handler) {
 // readTCPMessage 处理 Content-Length 分帧。
 func readTCPMessage(r *bufio.Reader) (*Message, error) {
 	var head []byte
+
+	// 1. 跳过起始行之前的所有空行（CRLF 心跳或残余换行，RFC 3261 7.5 规范要求）
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		trimmed := strings.TrimRight(line, "\r\n")
+		if trimmed == "" {
+			continue
+		}
+		head = append(head, line...)
+		break
+	}
+
+	// 2. 读取剩余的 Headers 直到空行
 	for {
 		line, err := r.ReadString('\n')
 		if err != nil {

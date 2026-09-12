@@ -62,21 +62,28 @@ func NewUA(localIP string, localPort int, serverIP string, serverPort int, trans
 }
 
 func (ua *UA) Start() error {
-	if ua.Transport == "tcp" {
-		t, err := ListenTCP(ua.LocalIP, ua.LocalPort)
-		if err != nil {
-			return err
-		}
+	var lastErr error
+	u, err := ListenUDP(ua.LocalIP, ua.LocalPort)
+	if err == nil {
+		ua.udp = u
+		go u.ReadLoop(ua.handleRaw)
+	} else {
+		lastErr = err
+	}
+
+	t, err := ListenTCP(ua.LocalIP, ua.LocalPort)
+	if err == nil {
 		ua.tcp = t
 		t.SetHandler(ua.handleRaw)
 		go t.AcceptLoop(ua.handleRaw)
 	} else {
-		t, err := ListenUDP(ua.LocalIP, ua.LocalPort)
-		if err != nil {
-			return err
+		if lastErr == nil {
+			lastErr = err
 		}
-		ua.udp = t
-		go t.ReadLoop(ua.handleRaw)
+	}
+
+	if ua.udp == nil && ua.tcp == nil {
+		return fmt.Errorf("failed to listen on %s:%d (udp/tcp): %v", ua.LocalIP, ua.LocalPort, lastErr)
 	}
 	return nil
 }
@@ -106,6 +113,18 @@ func (ua *UA) localHostPort() string {
 	return JoinHostPort(ua.LocalIP, ua.LocalPort)
 }
 
+func (ua *UA) contactHeader() string {
+	if strings.EqualFold(ua.Transport, "tcp") {
+		return fmt.Sprintf("<sip:%s@%s;transport=tcp>", ua.Username, ua.localHostPort())
+	}
+	return fmt.Sprintf("<sip:%s@%s>", ua.Username, ua.localHostPort())
+}
+
+// ContactURI 导出规范化的 Contact URI
+func (ua *UA) ContactURI() string {
+	return ua.contactHeader()
+}
+
 func (ua *UA) nextCSeq() int {
 	return int(atomic.AddInt32(&ua.cseq, 1))
 }
@@ -116,10 +135,16 @@ func (ua *UA) NextCSeq() int {
 }
 
 func (ua *UA) send(dst string, data []byte) error {
+	if strings.EqualFold(ua.Transport, "tcp") && ua.tcp != nil {
+		return ua.tcp.Send(dst, data)
+	}
 	if ua.udp != nil {
 		return ua.udp.Send(dst, data)
 	}
-	return ua.tcp.Send(dst, data)
+	if ua.tcp != nil {
+		return ua.tcp.Send(dst, data)
+	}
+	return fmt.Errorf("no transport available")
 }
 
 func (ua *UA) handleRaw(msg *Message, src net.Addr) {
@@ -192,7 +217,7 @@ func (ua *UA) requestOnce(method, requestURI string, extra func(*Message), body 
 	req.SetHeader("CSeq", fmt.Sprintf("%d %s", ua.nextCSeq(), method))
 	req.SetHeader("Max-Forwards", "70")
 	req.SetHeader("User-Agent", ua.UserAgent)
-	req.SetHeader("Contact", fmt.Sprintf("<sip:%s@%s>", ua.Username, ua.localHostPort()))
+	req.SetHeader("Contact", ua.contactHeader())
 	if contentType != "" {
 		req.SetHeader("Content-Type", contentType)
 	}
@@ -258,6 +283,18 @@ func (ua *UA) buildResponse(req *Message, code int, reason string) *Message {
 	return resp
 }
 
+// SendResponse 根据收到请求的来源协议原路回复响应。
+func (ua *UA) SendResponse(src net.Addr, msg *Message) error {
+	data := msg.Bytes()
+	if _, ok := src.(*net.UDPAddr); ok && ua.udp != nil {
+		return ua.udp.Send(src.String(), data)
+	}
+	if _, ok := src.(*net.TCPAddr); ok && ua.tcp != nil {
+		return ua.tcp.Send(src.String(), data)
+	}
+	return ua.send(src.String(), data)
+}
+
 // Reply 向 src 回复响应。
 func (ua *UA) Reply(req *Message, src net.Addr, code int, reason string, body []byte, contentType string) error {
 	resp := ua.buildResponse(req, code, reason)
@@ -268,7 +305,7 @@ func (ua *UA) Reply(req *Message, src net.Addr, code int, reason string, body []
 		}
 	}
 	resp.SetHeader("Content-Length", strconv.Itoa(len(resp.Body)))
-	return ua.send(src.String(), resp.Bytes())
+	return ua.SendResponse(src, resp)
 }
 
 // ===== 注册流程 =====
@@ -280,7 +317,7 @@ func (ua *UA) Register(expires int) error {
 	requestURI := fmt.Sprintf("sip:%s@%s:%d", ua.Username, ua.ServerIP, ua.ServerPort)
 	resp, err := ua.Request("REGISTER", requestURI, func(m *Message) {
 		m.SetHeader("Expires", strconv.Itoa(expires))
-		m.SetHeader("Contact", fmt.Sprintf("<sip:%s@%s>", ua.Username, ua.localHostPort()))
+		m.SetHeader("Contact", ua.contactHeader())
 	}, nil, "")
 	if err != nil {
 		ua.registered.Store(false)
@@ -305,7 +342,7 @@ func (ua *UA) Unregister() error {
 	requestURI := fmt.Sprintf("sip:%s@%s:%d", ua.Username, ua.ServerIP, ua.ServerPort)
 	_, err := ua.Request("REGISTER", requestURI, func(m *Message) {
 		m.SetHeader("Expires", "0")
-		m.SetHeader("Contact", fmt.Sprintf("<sip:%s@%s>", ua.Username, ua.localHostPort()))
+		m.SetHeader("Contact", ua.contactHeader())
 	}, nil, "")
 	ua.registered.Store(false)
 	if ua.OnUnregistered != nil {
