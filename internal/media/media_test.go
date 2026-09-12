@@ -269,3 +269,62 @@ func TestSessionSeekRTPStream(t *testing.T) {
 	}
 }
 
+func TestSessionStopCleanup(t *testing.T) {
+	udpRecv, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udpRecv.Close()
+	localAddr := udpRecv.LocalAddr().(*net.UDPAddr)
+
+	stopCalls := 0
+	mgr := NewSessionManager("127.0.0.1", 25, 1400, func(channelID string) (H264Source, error) {
+		return NewSyntheticSource(320, 240, 25)
+	})
+	mgr.OnStop = func(ch, callID string) {
+		stopCalls++
+	}
+
+	sdp := &SDPInfo{
+		IP:        "127.0.0.1",
+		VideoPort: localAddr.Port,
+		SSRC:      "0100000002",
+	}
+
+	callID := "test-cleanup-callid"
+	channelID := "34020000001320000002"
+	_, err = mgr.StartLive(channelID, callID, sdp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 验证会话存在
+	if sess := mgr.GetSession(callID); sess == nil {
+		t.Fatal("expected session to exist")
+	}
+	if list := mgr.ListSessions(); len(list) != 1 {
+		t.Fatalf("expected 1 session in list, got %d", len(list))
+	}
+
+	// 停止会话
+	mgr.StopByCallID(callID)
+
+	// 验证会话已被彻底清理
+	if sess := mgr.GetSession(callID); sess != nil {
+		t.Fatal("expected session to be cleaned up, but GetSession returned non-nil")
+	}
+	if list := mgr.ListSessions(); len(list) != 0 {
+		t.Fatalf("expected 0 sessions in list, got %d", len(list))
+	}
+	if stopCalls != 1 {
+		t.Fatalf("expected OnStop to be called exactly once, got %d", stopCalls)
+	}
+
+	// 再次调用 StopByCallID 应该是安全的（幂等）
+	mgr.StopByCallID(callID)
+	if stopCalls != 1 {
+		t.Fatalf("expected OnStop to still be 1 after redundant StopByCallID, got %d", stopCalls)
+	}
+}
+
+

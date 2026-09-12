@@ -174,6 +174,7 @@ type Session struct {
 	paused        atomic.Bool
 	currentOffset atomic.Int64 // 毫秒
 	OnComplete    func(channelID, callID string)
+	onClose       func(s *Session)
 
 	initialOffset float64
 	seekMu        sync.Mutex
@@ -316,6 +317,7 @@ func (m *SessionManager) StartSession(channelID, callID string, recv *SDPInfo, s
 		if old, ok := m.byChan[channelID]; ok {
 			m.mu.Unlock()
 			old.Stop()
+			m.remove(old)
 			m.mu.Lock()
 		}
 	}
@@ -342,6 +344,7 @@ func (m *SessionManager) StartSession(channelID, callID string, recv *SDPInfo, s
 		scale:         1.0,
 		initialOffset: initialOffset,
 		OnComplete:    m.OnComplete,
+		onClose:       func(sess *Session) { m.remove(sess) },
 		stopCh:        make(chan struct{}),
 	}
 	if initialOffset > 0 {
@@ -377,6 +380,7 @@ func (m *SessionManager) StopByCallID(callID string) {
 	m.mu.Unlock()
 	if ok {
 		s.Stop()
+		m.remove(s)
 	}
 }
 
@@ -442,6 +446,7 @@ func (m *SessionManager) StopByChannel(ch string) {
 	m.mu.Unlock()
 	if ok {
 		s.Stop()
+		m.remove(s)
 	}
 }
 
@@ -454,11 +459,22 @@ func (m *SessionManager) StopAll() {
 	m.mu.Unlock()
 	for _, s := range all {
 		s.Stop()
+		m.remove(s)
 	}
 }
 
 func (m *SessionManager) remove(s *Session) {
+	if s == nil {
+		return
+	}
 	m.mu.Lock()
+	if _, ok := m.sessions[s.CallID]; !ok {
+		if cur, ok2 := m.byChan[s.ChannelID]; ok2 && cur == s {
+			delete(m.byChan, s.ChannelID)
+		}
+		m.mu.Unlock()
+		return
+	}
 	delete(m.sessions, s.CallID)
 	if cur, ok := m.byChan[s.ChannelID]; ok && cur == s {
 		delete(m.byChan, s.ChannelID)
@@ -507,6 +523,9 @@ func (s *Session) loop() {
 		}
 		if s.tcpConn != nil {
 			_ = s.tcpConn.Close()
+		}
+		if s.onClose != nil {
+			s.onClose(s)
 		}
 	}()
 
