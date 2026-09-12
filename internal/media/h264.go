@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 // 每个 NAL 以 00 00 00 01 开头。
 type H264Source interface {
 	Next() ([]byte, error)
+	Seek(offsetSec float64, fps int) (actualSec float64, err error)
 	Close() error
 }
 
@@ -30,12 +32,13 @@ type FileSource struct {
 	data []byte
 	nals []nalUnit
 	// 预解析好的访问单元（每个 AU 是 data 切片）
-	aus    [][]byte
-	sps    []byte
-	pps    []byte
-	pos    int // 下一个 AU 下标
-	forceI bool
-	mu     sync.Mutex
+	aus        [][]byte
+	sps        []byte
+	pps        []byte
+	idrIndices []int // 包含 IDR 帧的 AU 下标
+	pos        int   // 下一个 AU 下标
+	forceI     bool
+	mu         sync.Mutex
 }
 
 func NewFileSource(path string) (*FileSource, error) {
@@ -54,6 +57,11 @@ func NewFileSource(path string) (*FileSource, error) {
 	s.aus = buildAccessUnits(b, s.nals)
 	if len(s.aus) == 0 {
 		return nil, fmt.Errorf("no access units found in %s", path)
+	}
+	for i, au := range s.aus {
+		if auHasIDR(au) {
+			s.idrIndices = append(s.idrIndices, i)
+		}
 	}
 	s.captureParamSets()
 	// 会话从 IDR 开始，避免开头就是 P 帧导致花屏
@@ -80,6 +88,10 @@ func (s *FileSource) captureParamSets() {
 }
 
 func (s *FileSource) skipToIDR() {
+	if len(s.idrIndices) > 0 {
+		s.pos = s.idrIndices[0]
+		return
+	}
 	for i, au := range s.aus {
 		if auHasIDR(au) {
 			s.pos = i
@@ -87,6 +99,59 @@ func (s *FileSource) skipToIDR() {
 		}
 	}
 	s.pos = 0
+}
+
+// Seek 根据 offsetSec（秒）定位到前置最近的 IDR 关键帧。
+// 若素材时长小于请求偏移量，会按素材总时长循环取模。
+func (s *FileSource) Seek(offsetSec float64, fps int) (float64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	totalFrames := len(s.aus)
+	if totalFrames == 0 {
+		return 0, io.EOF
+	}
+	if fps <= 0 {
+		fps = 25
+	}
+	if offsetSec < 0 {
+		offsetSec = 0
+	}
+
+	durationSec := float64(totalFrames) / float64(fps)
+	targetSec := offsetSec
+	if durationSec > 0 && offsetSec >= durationSec {
+		targetSec = math.Mod(offsetSec, durationSec)
+	}
+
+	targetFrame := int(targetSec * float64(fps))
+	if targetFrame >= totalFrames {
+		targetFrame = totalFrames - 1
+	}
+
+	// 查找 <= targetFrame 的最近 IDR 帧
+	chosenIDR := 0
+	if len(s.idrIndices) > 0 {
+		chosenIDR = s.idrIndices[0]
+		for _, idx := range s.idrIndices {
+			if idx <= targetFrame {
+				chosenIDR = idx
+			} else {
+				break
+			}
+		}
+	}
+
+	s.pos = chosenIDR
+	s.forceI = true // 标记在跳转后的下一次 Next() 强制带上 SPS/PPS
+
+	// 计算实际对齐的相对秒数
+	deltaSec := float64(targetFrame-chosenIDR) / float64(fps)
+	actualSec := offsetSec - deltaSec
+	if actualSec < 0 {
+		actualSec = 0
+	}
+	return actualSec, nil
 }
 
 func (s *FileSource) Next() ([]byte, error) {
@@ -103,12 +168,14 @@ func (s *FileSource) Next() ([]byte, error) {
 	au := s.aus[s.pos]
 	s.pos++
 
-	// 每个 IDR 前强制补 SPS/PPS，解决中途进流花屏
+	// 每个 IDR 前强制补 SPS/PPS，解决中途进流花屏；或经过 Seek 后 forceI 标记
 	out := au
-	if auHasIDR(au) && s.sps != nil && s.pps != nil {
+	isIDR := auHasIDR(au)
+	if (isIDR || s.forceI) && s.sps != nil && s.pps != nil {
 		if !bytes.Contains(au, s.sps) {
 			out = concatNALs(s.sps, s.pps, au)
 		}
+		s.forceI = false
 	}
 	return out, nil
 }
@@ -326,6 +393,20 @@ func NewSyntheticSource(w, h, fps int) (*SyntheticSource, error) {
 }
 
 func (s *SyntheticSource) Close() error { return nil }
+
+func (s *SyntheticSource) Seek(offsetSec float64, fps int) (float64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if offsetSec < 0 {
+		offsetSec = 0
+	}
+	if fps <= 0 {
+		fps = s.fps
+	}
+	s.frameIdx = int(offsetSec * float64(fps))
+	s.lastTime = time.Time{}
+	return offsetSec, nil
+}
 
 func (s *SyntheticSource) Next() ([]byte, error) {
 	s.mu.Lock()

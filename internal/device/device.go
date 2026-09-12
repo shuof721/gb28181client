@@ -304,11 +304,13 @@ func (d *Device) onInfo(m *sip.Message, src net.Addr) {
 					sess.SetScale(req.Scale)
 				}
 				if req.HasRange {
-					sess.Seek(req.RangeNPT)
+					actualSec := sess.Seek(req.RangeNPT)
+					rangeNPT = actualSec
+				} else {
+					rangeNPT = sess.CurrentOffset()
 				}
 				sess.Resume()
 				scale = sess.GetScale()
-				rangeNPT = sess.CurrentOffset()
 			case "PAUSE":
 				sess.Pause()
 				isPause = true
@@ -664,7 +666,8 @@ func (d *Device) onInvite(m *sip.Message, src net.Addr) {
 
 	var answer string
 	if isPlayback {
-		answer, err = d.ms.StartPlayback(channelID, callID, recv)
+		initOffset := d.calcPlaybackOffset(recv)
+		answer, err = d.ms.StartPlayback(channelID, callID, recv, initOffset)
 	} else {
 		answer, err = d.ms.StartLive(channelID, callID, recv)
 	}
@@ -748,4 +751,27 @@ func truncate(s string, n int) string {
 
 func unmarshalBody(body []byte, v any) error {
 	return gb28181.Unmarshal(body, v)
+}
+
+func (d *Device) calcPlaybackOffset(recv *media.SDPInfo) float64 {
+	if recv.StartTime == "" || recv.StartTime == "0" {
+		return 0
+	}
+	st, err := strconv.ParseInt(recv.StartTime, 10, 64)
+	if err != nil || st <= 0 {
+		return 0
+	}
+	// 若为 Unix 秒级时间戳（例如 > 1_000_000_000）
+	if st > 1_000_000_000 {
+		now := time.Now()
+		dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		// 模拟切片按 2 小时（7200 秒）一段
+		diff := st - dayStart.Unix()
+		if diff > 0 {
+			return float64(diff % 7200)
+		}
+		return 0
+	}
+	// 否则作为相对秒数
+	return float64(st)
 }

@@ -2,7 +2,10 @@ package media
 
 import (
 	"bytes"
+	"encoding/binary"
+	"net"
 	"testing"
+	"time"
 )
 
 func TestPackVideoPES(t *testing.T) {
@@ -132,6 +135,137 @@ func TestSessionControl(t *testing.T) {
 	sess.Seek(15.5)
 	if sess.CurrentOffset() != 15.5 {
 		t.Fatalf("expected offset 15.5, got %.2f", sess.CurrentOffset())
+	}
+}
+
+func TestSyntheticSourceSeek(t *testing.T) {
+	src, err := NewSyntheticSource(320, 240, 25)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, err := src.Seek(10.0, 25)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actual != 10.0 {
+		t.Fatalf("expected 10.0, got %.2f", actual)
+	}
+	if src.frameIdx != 250 {
+		t.Fatalf("expected frameIdx 250, got %d", src.frameIdx)
+	}
+}
+
+func TestFileSourceSeek(t *testing.T) {
+	sps := []byte{0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E}
+	pps := []byte{0x00, 0x00, 0x00, 0x01, 0x68, 0xCE, 0x38, 0x80}
+	idrAU := []byte{0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x84, 0x00}
+	pAU := []byte{0x00, 0x00, 0x00, 0x01, 0x61, 0x9A, 0x00, 0x00}
+
+	fs := &FileSource{
+		sps:        sps,
+		pps:        pps,
+		aus:        [][]byte{idrAU, pAU, pAU, idrAU, pAU},
+		idrIndices: []int{0, 3},
+	}
+
+	// 5 帧，25 fps，时长 0.2 秒
+	// seek 到 0.12 秒（对应第 3 帧，即第 2 个 IDR 帧）
+	act, err := fs.Seek(0.12, 25)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fs.pos != 3 {
+		t.Fatalf("expected pos 3, got %d", fs.pos)
+	}
+	if !fs.forceI {
+		t.Fatal("expected forceI to be true after seek")
+	}
+	_ = act
+
+	// Next() 取帧，应该强制包含 SPS 和 PPS
+	nextFrame, err := fs.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(nextFrame, sps) || !bytes.Contains(nextFrame, pps) {
+		t.Fatal("next frame after seek must contain SPS and PPS")
+	}
+	if fs.forceI {
+		t.Fatal("forceI should be reset to false after Next()")
+	}
+}
+
+func TestSessionSeekRTPStream(t *testing.T) {
+	// 启动本地 UDP 接收端模拟流媒体服务（ZLMediaKit）
+	udpRecv, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udpRecv.Close()
+	localAddr := udpRecv.LocalAddr().(*net.UDPAddr)
+
+	mgr := NewSessionManager("127.0.0.1", 25, 1400, func(channelID string) (H264Source, error) {
+		return NewSyntheticSource(320, 240, 25)
+	})
+
+	sdp := &SDPInfo{
+		IP:        "127.0.0.1",
+		VideoPort: localAddr.Port,
+		SSRC:      "0100000001",
+	}
+
+	callID := "test-seek-callid"
+	_, err = mgr.StartPlayback("34020000001320000001", callID, sdp, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.StopByCallID(callID)
+
+	sess := mgr.GetSession(callID)
+	if sess == nil {
+		t.Fatal("session not found")
+	}
+
+	buf := make([]byte, 2048)
+	// 读取第一个包，验证初始时间戳在较小区间
+	_ = udpRecv.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, _, err := udpRecv.ReadFrom(buf)
+	if err != nil {
+		t.Fatalf("failed to read initial RTP packet: %v", err)
+	}
+	initTS := binary.BigEndian.Uint32(buf[4:8])
+	if initTS > 90000*5 {
+		t.Fatalf("initial timestamp unexpectedly large: %d", initTS)
+	}
+
+	// 触发 Seek 到 10 秒
+	actual := sess.Seek(10.0)
+	if actual != 10.0 {
+		t.Fatalf("expected seek actual 10.0, got %.2f", actual)
+	}
+
+	// 读取后续收到的 RTP 包，验证时间戳跳转到 10.0 * 90000 (约 900000) 附近
+	gotSeekTS := false
+	for i := 0; i < 150; i++ {
+		_ = udpRecv.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		n, _, err = udpRecv.ReadFrom(buf)
+		if err != nil {
+			t.Logf("read error at i=%d: %v", i, err)
+			break
+		}
+		if n < 12 {
+			continue
+		}
+		ts := binary.BigEndian.Uint32(buf[4:8])
+		// 900000 附近（允许后续发出的帧有小幅 3600 递增）
+		if ts >= 900000 && ts < 900000+90000*2 {
+			gotSeekTS = true
+			break
+		}
+	}
+
+	if !gotSeekTS {
+		t.Fatalf("expected RTP timestamp to jump to >= 900000 after seek to 10s, last ts=%d", binary.BigEndian.Uint32(buf[4:8]))
 	}
 }
 

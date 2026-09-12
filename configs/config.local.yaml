@@ -1,6 +1,6 @@
 sip:
   server_ip: "127.0.0.1"
-  server_port: 5060
+  server_port: 8116
   local_ip: "127.0.0.1"
   local_port: 5070
   transport: "udp"

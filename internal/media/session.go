@@ -166,8 +166,14 @@ type Session struct {
 	scaleMu       sync.RWMutex
 	scale         float64
 	paused        atomic.Bool
-	currentOffset atomic.Int64 // 秒
+	currentOffset atomic.Int64 // 毫秒
 	OnComplete    func(channelID, callID string)
+
+	initialOffset float64
+	seekMu        sync.Mutex
+	seekPending   bool
+	seekTarget    float64
+	seekDone      chan float64
 
 	stopCh  chan struct{}
 	stopped atomic.Bool
@@ -207,9 +213,36 @@ func (s *Session) IsPaused() bool {
 	return s.paused.Load()
 }
 
-func (s *Session) Seek(offsetSec float64) {
-	s.currentOffset.Store(int64(offsetSec * 1000))
-	log.Printf("[media] session %s ch=%s seek to %.2fs", s.CallID, s.ChannelID, offsetSec)
+func (s *Session) Seek(offsetSec float64) float64 {
+	if offsetSec < 0 {
+		offsetSec = 0
+	}
+	s.seekMu.Lock()
+	s.seekTarget = offsetSec
+	s.seekPending = true
+	done := make(chan float64, 1)
+	s.seekDone = done
+	s.seekMu.Unlock()
+
+	log.Printf("[media] session %s ch=%s seek requested to %.2fs", s.CallID, s.ChannelID, offsetSec)
+
+	// 若 session 未启动 loop，直接更新并快速返回
+	if s.stopCh == nil {
+		s.currentOffset.Store(int64(offsetSec * 1000))
+		return offsetSec
+	}
+
+	// 若 session 已经在运行，等待 loop 处理完成并返回实际定位时间；若已停止则快速返回
+	select {
+	case actual := <-done:
+		return actual
+	case <-time.After(500 * time.Millisecond):
+		s.currentOffset.Store(int64(offsetSec * 1000))
+		return offsetSec
+	case <-s.stopCh:
+		s.currentOffset.Store(int64(offsetSec * 1000))
+		return offsetSec
+	}
 }
 
 func (s *Session) CurrentOffset() float64 {
@@ -260,18 +293,18 @@ func FormatSSRC(v uint32) string {
 }
 
 func (m *SessionManager) StartLive(channelID, callID string, recv *SDPInfo) (string, error) {
-	return m.StartSession(channelID, callID, recv, "live")
+	return m.StartSession(channelID, callID, recv, "live", 0)
 }
 
-func (m *SessionManager) StartPlayback(channelID, callID string, recv *SDPInfo) (string, error) {
+func (m *SessionManager) StartPlayback(channelID, callID string, recv *SDPInfo, initialOffset float64) (string, error) {
 	streamType := "playback"
 	if strings.EqualFold(recv.SessionName, "download") {
 		streamType = "download"
 	}
-	return m.StartSession(channelID, callID, recv, streamType)
+	return m.StartSession(channelID, callID, recv, streamType, initialOffset)
 }
 
-func (m *SessionManager) StartSession(channelID, callID string, recv *SDPInfo, streamType string) (answerSDP string, err error) {
+func (m *SessionManager) StartSession(channelID, callID string, recv *SDPInfo, streamType string, initialOffset float64) (answerSDP string, err error) {
 	m.mu.Lock()
 	if streamType == "live" {
 		if old, ok := m.byChan[channelID]; ok {
@@ -287,22 +320,26 @@ func (m *SessionManager) StartSession(channelID, callID string, recv *SDPInfo, s
 	}
 
 	s := &Session{
-		ChannelID:  channelID,
-		CallID:     callID,
-		SSRC:       FormatSSRC(ssrcNum),
-		ssrcNum:    ssrcNum,
-		StreamType: streamType,
-		remoteIP:   recv.IP,
-		remotePort: recv.VideoPort,
-		isTCP:      recv.IsTCP,
-		factory:    func() (H264Source, error) { return m.sourceFactory(channelID) },
-		fps:        m.fps,
-		payload:    m.payload,
-		localIP:    m.localIP,
-		startTime:  time.Now(),
-		scale:      1.0,
-		OnComplete: m.OnComplete,
-		stopCh:     make(chan struct{}),
+		ChannelID:     channelID,
+		CallID:        callID,
+		SSRC:          FormatSSRC(ssrcNum),
+		ssrcNum:       ssrcNum,
+		StreamType:    streamType,
+		remoteIP:      recv.IP,
+		remotePort:    recv.VideoPort,
+		isTCP:         recv.IsTCP,
+		factory:       func() (H264Source, error) { return m.sourceFactory(channelID) },
+		fps:           m.fps,
+		payload:       m.payload,
+		localIP:       m.localIP,
+		startTime:     time.Now(),
+		scale:         1.0,
+		initialOffset: initialOffset,
+		OnComplete:    m.OnComplete,
+		stopCh:        make(chan struct{}),
+	}
+	if initialOffset > 0 {
+		s.currentOffset.Store(int64(initialOffset * 1000))
 	}
 
 	if recv.IsTCP {
@@ -465,6 +502,12 @@ func (s *Session) loop() {
 		}
 	}()
 
+	var wallClock uint64
+	if s.initialOffset > 0 {
+		wallClock = uint64(s.initialOffset * 90000)
+	}
+	var lastFrameTime time.Time
+
 	// 先加载/抽流（可能耗时），期间不阻塞 SIP 200 OK
 	if s.factory != nil {
 		select {
@@ -480,6 +523,15 @@ func (s *Session) loop() {
 		}
 		s.source = src
 		log.Printf("[media] source ready ch=%s", s.ChannelID)
+		if s.initialOffset > 0 {
+			act, err := s.source.Seek(s.initialOffset, s.fps)
+			if err == nil {
+				wallClock = uint64(act * 90000)
+				s.currentOffset.Store(int64(act * 1000))
+				log.Printf("[media] session %s ch=%s initial seek to %.2fs (actual=%.2fs wallClock=%d)",
+					s.CallID, s.ChannelID, s.initialOffset, act, wallClock)
+			}
+		}
 	}
 
 	var udp *net.UDPConn
@@ -497,14 +549,45 @@ func (s *Session) loop() {
 	}
 
 	raddr := &net.UDPAddr{IP: net.ParseIP(s.remoteIP), Port: s.remotePort}
-	var wallClock uint64
-	var lastFrameTime time.Time
 
 	for {
 		select {
 		case <-s.stopCh:
 			return
 		default:
+		}
+
+		// 处理挂起的 Seek 请求
+		s.seekMu.Lock()
+		if s.seekPending {
+			targetSec := s.seekTarget
+			doneCh := s.seekDone
+			s.seekPending = false
+			s.seekDone = nil
+			s.seekMu.Unlock()
+
+			actualSec := targetSec
+			if s.source != nil {
+				act, err := s.source.Seek(targetSec, s.fps)
+				if err == nil {
+					actualSec = act
+				} else {
+					log.Printf("[media] source seek failed ch=%s: %v", s.ChannelID, err)
+				}
+			}
+			wallClock = uint64(actualSec * 90000)
+			s.currentOffset.Store(int64(actualSec * 1000))
+			lastFrameTime = time.Time{} // 立即发帧，无需等待前一帧的间隔
+			log.Printf("[media] session %s ch=%s seek applied target=%.2fs actual=%.2fs wallClock=%d",
+				s.CallID, s.ChannelID, targetSec, actualSec, wallClock)
+			if doneCh != nil {
+				select {
+				case doneCh <- actualSec:
+				default:
+				}
+			}
+		} else {
+			s.seekMu.Unlock()
 		}
 
 		if s.paused.Load() {
@@ -548,11 +631,12 @@ func (s *Session) loop() {
 		if len(frame) == 0 {
 			continue
 		}
-		// 90kHz
-		wallClock += uint64(90000 / s.fps)
+		// 90kHz：PES 与 RTP 时间戳同步
 		rtpTS := uint32(wallClock)
 		ps := PackVideoPES(frame, wallClock)
 		pkts := RTPPacketizePS(ps, s.ssrcNum, &s.seq, rtpTS, 96, s.payload)
+		wallClock += uint64(90000 / s.fps)
+		s.currentOffset.Add(int64(1000 / s.fps))
 		for _, pkt := range pkts {
 			s.packetsSent.Add(1)
 			s.bytesSent.Add(uint64(len(pkt)))

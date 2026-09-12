@@ -33,10 +33,12 @@ func (m multiWriter) Write(p []byte) (int, error) {
 }
 
 func main() {
-	cfgPath := flag.String("config", "configs/config.yaml", "配置文件路径")
+	var cfgPath string
+	flag.StringVar(&cfgPath, "config", "configs/config.yaml", "配置文件路径")
+	flag.StringVar(&cfgPath, "c", "configs/config.yaml", "配置文件路径 (简写)")
 	flag.Parse()
 
-	cfg, err := config.Load(*cfgPath)
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load config failed: %v\n", err)
 		os.Exit(1)
