@@ -221,6 +221,16 @@ type RecordInfoResp struct {
 	} `xml:"RecordList"`
 }
 
+// ----- MediaStatus -----
+
+type MediaStatusNotify struct {
+	XMLName    xml.Name `xml:"Notify"`
+	CmdType    string   `xml:"CmdType"`
+	SN         string   `xml:"SN"`
+	DeviceID   string   `xml:"DeviceID"`
+	NotifyType string   `xml:"NotifyType"` // 121: 历史媒体发送结束, 120: 媒体流已准备就绪
+}
+
 // ----- DeviceConfig 等可按需扩展 -----
 
 func MarshalXML(v any) ([]byte, error) {

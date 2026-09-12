@@ -46,3 +46,31 @@ func TestDecodePTZ(t *testing.T) {
 		t.Fatal("should decode")
 	}
 }
+
+func TestParseRecordInfoQuery(t *testing.T) {
+	body := []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Query>
+  <CmdType>RecordInfo</CmdType>
+  <SN>12345</SN>
+  <DeviceID>34020000001320000001</DeviceID>
+  <StartTime>2026-09-11T08:00:00</StartTime>
+  <EndTime>2026-09-11T18:00:00</EndTime>
+  <Type>all</Type>
+</Query>`)
+	root, err := ParseRoot(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root.CmdType != "RecordInfo" || root.SN != "12345" || root.DeviceID != "34020000001320000001" {
+		t.Fatalf("unexpected root: %+v", root)
+	}
+
+	var req RecordInfoReq
+	if err := Unmarshal(body, &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.StartTime != "2026-09-11T08:00:00" || req.EndTime != "2026-09-11T18:00:00" {
+		t.Fatalf("unexpected query req: %+v", req)
+	}
+}
+

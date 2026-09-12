@@ -75,3 +75,63 @@ func TestSyntheticSource(t *testing.T) {
 		t.Fatalf("no annexb start: %x", frame[:8])
 	}
 }
+
+func TestPlaybackSDP(t *testing.T) {
+	sdp := "v=0\r\n" +
+		"o=34020000002000000001 0 0 IN IP4 192.168.1.10\r\n" +
+		"s=Playback\r\n" +
+		"u=34020000001320000001:3\r\n" +
+		"c=IN IP4 192.168.1.10\r\n" +
+		"t=1726041600 1726048800\r\n" +
+		"m=video 30002 RTP/AVP 96\r\n" +
+		"a=recvonly\r\n" +
+		"a=rtpmap:96 PS/90000\r\n" +
+		"y=0100000054\r\n"
+
+	info, err := ParseSDP(sdp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.SessionName != "Playback" {
+		t.Fatalf("expected Playback, got %s", info.SessionName)
+	}
+	if info.StartTime != "1726041600" || info.EndTime != "1726048800" {
+		t.Fatalf("unexpected t line: %s %s", info.StartTime, info.EndTime)
+	}
+
+	ans := BuildAnswerSDP("34020000002000000001", "34020000001320000001", "192.168.1.50", "0100000054", info)
+	if !bytes.Contains([]byte(ans), []byte("s=Playback")) {
+		t.Fatal("answer SDP missing s=Playback")
+	}
+	if !bytes.Contains([]byte(ans), []byte("u=34020000001320000001:3")) {
+		t.Fatal("answer SDP missing u=...:3")
+	}
+	if !bytes.Contains([]byte(ans), []byte("t=1726041600 1726048800")) {
+		t.Fatal("answer SDP missing t=...")
+	}
+}
+
+func TestSessionControl(t *testing.T) {
+	sess := &Session{
+		scale: 1.0,
+	}
+	sess.SetScale(2.0)
+	if sess.GetScale() != 2.0 {
+		t.Fatalf("expected scale 2.0, got %.2f", sess.GetScale())
+	}
+
+	sess.Pause()
+	if !sess.IsPaused() {
+		t.Fatal("expected paused")
+	}
+	sess.Resume()
+	if sess.IsPaused() {
+		t.Fatal("expected not paused")
+	}
+
+	sess.Seek(15.5)
+	if sess.CurrentOffset() != 15.5 {
+		t.Fatalf("expected offset 15.5, got %.2f", sess.CurrentOffset())
+	}
+}
+

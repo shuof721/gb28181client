@@ -46,7 +46,13 @@ func ParseSDP(s string) (*SDPInfo, error) {
 				info.IP = parts[2]
 			}
 		case strings.HasPrefix(line, "t="):
-			info.StartTime = line[2:]
+			parts := strings.Fields(line[2:])
+			if len(parts) >= 1 {
+				info.StartTime = parts[0]
+			}
+			if len(parts) >= 2 {
+				info.EndTime = parts[1]
+			}
 		case strings.HasPrefix(line, "m="):
 			// m=video 30000 RTP/AVP 96 97 98
 			// m=video 30000 TCP/RTP/AVP 96
@@ -77,25 +83,25 @@ func ParseSDP(s string) (*SDPInfo, error) {
 			info.SSRC = strings.TrimSpace(line[2:])
 		}
 	}
-	if info.IP == "" || info.VideoPort == 0 {
-		return nil, fmt.Errorf("invalid sdp: missing c= or m=video")
+	if info.IP == "" {
+		return nil, fmt.Errorf("invalid sdp: missing c= connection IP")
+	}
+	if info.VideoPort == 0 {
+		return nil, fmt.Errorf("invalid sdp: m=video port is 0 (platform media server/ZLM failed to open RTP port)")
 	}
 	return info, nil
 }
 
 // BuildAnswerSDP 构造设备 200 OK 中的 SDP（sendonly）。
 func BuildAnswerSDP(deviceID, channelID, localIP string, ssrc string, recv *SDPInfo) string {
-	// o=设备ID 0 0 IN IP4 localIP
-	// s=Play
-	// c=IN IP4 localIP
-	// t=0 0
-	// m=video PORT RTP/AVP 96
-	// a=sendonly
-	// a=rtpmap:96 PS/90000
-	// y=ssrc
-	port := 0 // 设备侧接收端口若不需要可填 0；WVP 用我们 sendonly，端口可任意
-	// 许多实现填 0 或一个本地端口
-	port = 0
+	sessName := firstNonEmpty(recv.SessionName, "Play")
+	tLine := "t=0 0"
+	if recv.StartTime != "" || recv.EndTime != "" {
+		st := firstNonEmpty(recv.StartTime, "0")
+		et := firstNonEmpty(recv.EndTime, "0")
+		tLine = fmt.Sprintf("t=%s %s", st, et)
+	}
+	port := 0
 	proto := "RTP/AVP"
 	if recv.IsTCP {
 		proto = "TCP/RTP/AVP"
@@ -103,9 +109,12 @@ func BuildAnswerSDP(deviceID, channelID, localIP string, ssrc string, recv *SDPI
 	var b strings.Builder
 	fmt.Fprintf(&b, "v=0\r\n")
 	fmt.Fprintf(&b, "o=%s 0 0 IN IP4 %s\r\n", deviceID, localIP)
-	fmt.Fprintf(&b, "s=%s\r\n", firstNonEmpty(recv.SessionName, "Play"))
+	fmt.Fprintf(&b, "s=%s\r\n", sessName)
+	if strings.EqualFold(sessName, "playback") || strings.EqualFold(sessName, "download") {
+		fmt.Fprintf(&b, "u=%s:3\r\n", channelID)
+	}
 	fmt.Fprintf(&b, "c=IN IP4 %s\r\n", localIP)
-	fmt.Fprintf(&b, "t=0 0\r\n")
+	fmt.Fprintf(&b, "%s\r\n", tLine)
 	fmt.Fprintf(&b, "m=video %d %s 96\r\n", port, proto)
 	if recv.IsTCP {
 		fmt.Fprintf(&b, "a=setup:passive\r\n")
@@ -134,6 +143,7 @@ type Session struct {
 	SSRC      string
 	ssrcNum   uint32
 
+	StreamType string // "live", "playback", "download"
 	remoteIP   string
 	remotePort int
 	isTCP      bool
@@ -152,9 +162,58 @@ type Session struct {
 	bytesSent   atomic.Uint64
 	startTime   time.Time
 
+	// 回放控制
+	scaleMu       sync.RWMutex
+	scale         float64
+	paused        atomic.Bool
+	currentOffset atomic.Int64 // 秒
+	OnComplete    func(channelID, callID string)
+
 	stopCh  chan struct{}
 	stopped atomic.Bool
 	wg      sync.WaitGroup
+}
+
+func (s *Session) GetScale() float64 {
+	s.scaleMu.RLock()
+	defer s.scaleMu.RUnlock()
+	if s.scale <= 0 {
+		return 1.0
+	}
+	return s.scale
+}
+
+func (s *Session) SetScale(scale float64) {
+	if scale <= 0 {
+		scale = 1.0
+	}
+	s.scaleMu.Lock()
+	s.scale = scale
+	s.scaleMu.Unlock()
+	log.Printf("[media] session %s ch=%s scale -> %.2f", s.CallID, s.ChannelID, scale)
+}
+
+func (s *Session) Pause() {
+	s.paused.Store(true)
+	log.Printf("[media] session %s ch=%s paused", s.CallID, s.ChannelID)
+}
+
+func (s *Session) Resume() {
+	s.paused.Store(false)
+	log.Printf("[media] session %s ch=%s resumed", s.CallID, s.ChannelID)
+}
+
+func (s *Session) IsPaused() bool {
+	return s.paused.Load()
+}
+
+func (s *Session) Seek(offsetSec float64) {
+	s.currentOffset.Store(int64(offsetSec * 1000))
+	log.Printf("[media] session %s ch=%s seek to %.2fs", s.CallID, s.ChannelID, offsetSec)
+}
+
+func (s *Session) CurrentOffset() float64 {
+	return float64(s.currentOffset.Load()) / 1000.0
 }
 
 type SessionManager struct {
@@ -167,8 +226,9 @@ type SessionManager struct {
 	payload       int
 	localIP       string
 
-	OnStart func(ch string, callID string)
-	OnStop  func(ch string, callID string)
+	OnStart    func(ch string, callID string)
+	OnStop     func(ch string, callID string)
+	OnComplete func(ch string, callID string)
 }
 
 func NewSessionManager(localIP string, fps, payload int, factory func(channelID string) (H264Source, error)) *SessionManager {
@@ -199,15 +259,26 @@ func FormatSSRC(v uint32) string {
 	return fmt.Sprintf("%010d", v)
 }
 
-// StartLive 处理 INVITE 实时点播。
-// 注意：这里只建会话并立刻返回 SDP，不在锁内/不在调用栈里抽视频，
-// 否则 ffmpeg 抽流几十秒会导致 WVP 收流超时。
-func (m *SessionManager) StartLive(channelID, callID string, recv *SDPInfo) (answerSDP string, err error) {
+func (m *SessionManager) StartLive(channelID, callID string, recv *SDPInfo) (string, error) {
+	return m.StartSession(channelID, callID, recv, "live")
+}
+
+func (m *SessionManager) StartPlayback(channelID, callID string, recv *SDPInfo) (string, error) {
+	streamType := "playback"
+	if strings.EqualFold(recv.SessionName, "download") {
+		streamType = "download"
+	}
+	return m.StartSession(channelID, callID, recv, streamType)
+}
+
+func (m *SessionManager) StartSession(channelID, callID string, recv *SDPInfo, streamType string) (answerSDP string, err error) {
 	m.mu.Lock()
-	if old, ok := m.byChan[channelID]; ok {
-		m.mu.Unlock()
-		old.Stop()
-		m.mu.Lock()
+	if streamType == "live" {
+		if old, ok := m.byChan[channelID]; ok {
+			m.mu.Unlock()
+			old.Stop()
+			m.mu.Lock()
+		}
 	}
 
 	ssrcNum := ParseSSRC(recv.SSRC)
@@ -220,6 +291,7 @@ func (m *SessionManager) StartLive(channelID, callID string, recv *SDPInfo) (ans
 		CallID:     callID,
 		SSRC:       FormatSSRC(ssrcNum),
 		ssrcNum:    ssrcNum,
+		StreamType: streamType,
 		remoteIP:   recv.IP,
 		remotePort: recv.VideoPort,
 		isTCP:      recv.IsTCP,
@@ -228,6 +300,8 @@ func (m *SessionManager) StartLive(channelID, callID string, recv *SDPInfo) (ans
 		payload:    m.payload,
 		localIP:    m.localIP,
 		startTime:  time.Now(),
+		scale:      1.0,
+		OnComplete: m.OnComplete,
 		stopCh:     make(chan struct{}),
 	}
 
@@ -239,18 +313,26 @@ func (m *SessionManager) StartLive(channelID, callID string, recv *SDPInfo) (ans
 	}
 
 	m.sessions[callID] = s
-	m.byChan[channelID] = s
+	if streamType == "live" {
+		m.byChan[channelID] = s
+	}
 	m.mu.Unlock()
 
 	answer := BuildAnswerSDP(channelID, channelID, m.localIP, s.SSRC, recv)
 	s.wg.Add(1)
 	go s.loop()
-	log.Printf("[media] start live ch=%s callID=%s -> %s:%d ssrc=%s tcp=%v",
-		channelID, callID, s.remoteIP, s.remotePort, s.SSRC, s.isTCP)
+	log.Printf("[media] start %s ch=%s callID=%s -> %s:%d ssrc=%s tcp=%v",
+		streamType, channelID, callID, s.remoteIP, s.remotePort, s.SSRC, s.isTCP)
 	if m.OnStart != nil {
 		m.OnStart(channelID, callID)
 	}
 	return answer, nil
+}
+
+func (m *SessionManager) GetSession(callID string) *Session {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sessions[callID]
 }
 
 func (m *SessionManager) StopByCallID(callID string) {
@@ -264,17 +346,21 @@ func (m *SessionManager) StopByCallID(callID string) {
 
 // SessionInfo 供 UI/状态查询。
 type SessionInfo struct {
-	ChannelID   string  `json:"channelId"`
-	CallID      string  `json:"callId"`
-	SSRC        string  `json:"ssrc"`
-	RemoteIP    string  `json:"remoteIp"`
-	RemotePort  int     `json:"remotePort"`
-	TCP         bool    `json:"tcp"`
-	SourceReady bool    `json:"sourceReady"`
-	PacketsSent uint64  `json:"packetsSent"`
-	BytesSent   uint64  `json:"bytesSent"`
-	DurationSec int64   `json:"durationSec"`
-	BitrateKbps float64 `json:"bitrateKbps"`
+	ChannelID     string  `json:"channelId"`
+	CallID        string  `json:"callId"`
+	SSRC          string  `json:"ssrc"`
+	StreamType    string  `json:"streamType"`
+	RemoteIP      string  `json:"remoteIp"`
+	RemotePort    int     `json:"remotePort"`
+	TCP           bool    `json:"tcp"`
+	SourceReady   bool    `json:"sourceReady"`
+	PacketsSent   uint64  `json:"packetsSent"`
+	BytesSent     uint64  `json:"bytesSent"`
+	DurationSec   int64   `json:"durationSec"`
+	BitrateKbps   float64 `json:"bitrateKbps"`
+	Scale         float64 `json:"scale"`
+	Paused        bool    `json:"paused"`
+	CurrentOffset float64 `json:"currentOffset"`
 }
 
 func (m *SessionManager) ListSessions() []SessionInfo {
@@ -289,18 +375,26 @@ func (m *SessionManager) ListSessions() []SessionInfo {
 		if dur > 0 {
 			kbps = float64(bytes*8) / dur / 1000.0
 		}
+		streamType := s.StreamType
+		if streamType == "" {
+			streamType = "live"
+		}
 		out = append(out, SessionInfo{
-			ChannelID:   s.ChannelID,
-			CallID:      s.CallID,
-			SSRC:        s.SSRC,
-			RemoteIP:    s.remoteIP,
-			RemotePort:  s.remotePort,
-			TCP:         s.isTCP,
-			SourceReady: s.source != nil,
-			PacketsSent: s.packetsSent.Load(),
-			BytesSent:   bytes,
-			DurationSec: durSec,
-			BitrateKbps: kbps,
+			ChannelID:     s.ChannelID,
+			CallID:        s.CallID,
+			SSRC:          s.SSRC,
+			StreamType:    streamType,
+			RemoteIP:      s.remoteIP,
+			RemotePort:    s.remotePort,
+			TCP:           s.isTCP,
+			SourceReady:   s.source != nil,
+			PacketsSent:   s.packetsSent.Load(),
+			BytesSent:     bytes,
+			DurationSec:   durSec,
+			BitrateKbps:   kbps,
+			Scale:         s.GetScale(),
+			Paused:        s.IsPaused(),
+			CurrentOffset: s.CurrentOffset(),
 		})
 	}
 	return out
@@ -404,56 +498,78 @@ func (s *Session) loop() {
 
 	raddr := &net.UDPAddr{IP: net.ParseIP(s.remoteIP), Port: s.remotePort}
 	var wallClock uint64
-	interval := time.Second / time.Duration(s.fps)
-	if interval <= 0 {
-		interval = 40 * time.Millisecond
-	}
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	var lastFrameTime time.Time
 
 	for {
 		select {
 		case <-s.stopCh:
 			return
-		case <-ticker.C:
-			if s.source == nil {
-				continue
+		default:
+		}
+
+		if s.paused.Load() {
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+
+		scale := s.GetScale()
+		fps := float64(s.fps) * scale
+		if fps <= 0 {
+			fps = 25.0
+		}
+		interval := time.Duration(float64(time.Second) / fps)
+		if interval <= 0 {
+			interval = 10 * time.Millisecond
+		}
+
+		if !lastFrameTime.IsZero() {
+			elapsed := time.Since(lastFrameTime)
+			if elapsed < interval {
+				wait := interval - elapsed
+				select {
+				case <-s.stopCh:
+					return
+				case <-time.After(wait):
+				}
 			}
-			frame, err := s.source.Next()
-			if err != nil {
-				log.Printf("[media] source error ch=%s: %v", s.ChannelID, err)
-				// synthetic/file 循环源一般不 error；file EOF 已内部循环
-				time.Sleep(200 * time.Millisecond)
-				continue
-			}
-			if len(frame) == 0 {
-				continue
-			}
-			// 90kHz
-			wallClock += uint64(90000 / s.fps)
-			rtpTS := uint32(wallClock)
-			ps := PackVideoPES(frame, wallClock)
-			pkts := RTPPacketizePS(ps, s.ssrcNum, &s.seq, rtpTS, 96, s.payload)
-			for _, pkt := range pkts {
-				s.packetsSent.Add(1)
-				s.bytesSent.Add(uint64(len(pkt)))
-				if s.isTCP {
-					if s.tcpConn == nil {
-						return
-					}
-					// GB28181 TCP：WVP 常用 RFC4571 风格 2 字节大端长度 + RTP
-					// （另有 0x24 interleaved 模式，当前实现长度前缀）
-					lb := []byte{byte(len(pkt) >> 8), byte(len(pkt))}
-					if _, err := s.tcpConn.Write(append(lb, pkt...)); err != nil {
-						log.Printf("[media] tcp write error: %v", err)
-						return
-					}
-				} else {
-					if _, err := udp.WriteToUDP(pkt, raddr); err != nil {
-						log.Printf("[media] udp write error: %v", err)
-						return
-					}
+		}
+		lastFrameTime = time.Now()
+
+		if s.source == nil {
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		frame, err := s.source.Next()
+		if err != nil {
+			log.Printf("[media] source error ch=%s: %v", s.ChannelID, err)
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+		if len(frame) == 0 {
+			continue
+		}
+		// 90kHz
+		wallClock += uint64(90000 / s.fps)
+		rtpTS := uint32(wallClock)
+		ps := PackVideoPES(frame, wallClock)
+		pkts := RTPPacketizePS(ps, s.ssrcNum, &s.seq, rtpTS, 96, s.payload)
+		for _, pkt := range pkts {
+			s.packetsSent.Add(1)
+			s.bytesSent.Add(uint64(len(pkt)))
+			if s.isTCP {
+				if s.tcpConn == nil {
+					return
+				}
+				// GB28181 TCP：WVP 常用 RFC4571 风格 2 字节大端长度 + RTP
+				lb := []byte{byte(len(pkt) >> 8), byte(len(pkt))}
+				if _, err := s.tcpConn.Write(append(lb, pkt...)); err != nil {
+					log.Printf("[media] tcp write error: %v", err)
+					return
+				}
+			} else {
+				if _, err := udp.WriteToUDP(pkt, raddr); err != nil {
+					log.Printf("[media] udp write error: %v", err)
+					return
 				}
 			}
 		}

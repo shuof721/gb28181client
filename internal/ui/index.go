@@ -102,6 +102,18 @@ body{
   background:rgba(16,185,129,0.15);border-color:rgba(16,185,129,0.35);color:#a7f3d0;
 }
 .badge.live .dot{background:var(--ok);box-shadow:0 0 6px var(--ok)}
+.badge.playback{
+  background:rgba(99,102,241,0.12);border-color:rgba(99,102,241,0.3);color:#a5b4fc;
+}
+.badge.playback .dot{background:#818cf8;box-shadow:0 0 6px #818cf8}
+.badge.download{
+  background:rgba(6,182,212,0.12);border-color:rgba(6,182,212,0.3);color:#67e8f9;
+}
+.badge.download .dot{background:#22d3ee;box-shadow:0 0 6px #22d3ee}
+.badge.paused{
+  background:rgba(245,158,11,0.12);border-color:rgba(245,158,11,0.3);color:#fcd34d;
+}
+.badge.paused .dot{background:#fbbf24}
 
 @keyframes pulse{
   0%,100%{opacity:1;transform:scale(1)}
@@ -523,6 +535,7 @@ table.custom-tbl tr:hover td{background:rgba(255,255,255,0.02)}
         <thead>
           <tr>
             <th>通道编号</th>
+            <th>类型</th>
             <th>SSRC (国标点播)</th>
             <th>对端媒体接收地址</th>
             <th>传输模式</th>
@@ -534,7 +547,7 @@ table.custom-tbl tr:hover td{background:rgba(255,255,255,0.02)}
           </tr>
         </thead>
         <tbody id="sessTbody">
-          <tr><td colspan="9"><div class="empty-msg">当前没有活跃的点播推流会话</div></td></tr>
+          <tr><td colspan="10"><div class="empty-msg">当前没有活跃的点播推流会话</div></td></tr>
         </tbody>
       </table>
     </div>
@@ -907,7 +920,7 @@ function renderChannels(st, sessMap){
 
       (isLive ? ('<div class="ch-live-bar">' +
         '<div style="font-size:11.5px;color:#6ee7b7">' +
-          '<div><b>SSRC:</b> ' + esc(sess.ssrc) + '</div>' +
+          '<div><b>' + (sess.streamType === 'playback' ? '录像回放' : (sess.streamType === 'download' ? '录像下载' : '实时点播')) + ' | SSRC:</b> ' + esc(sess.ssrc) + '</div>' +
           '<div><b>对端:</b> ' + esc(sess.remoteIp) + ':' + sess.remotePort + ' (' + (sess.tcp?'TCP':'UDP') + ')</div>' +
         '</div>' +
         '<button class="btn btn-danger btn-sm" onclick="stopSession(\'' + esc(sess.callId) + '\')">断开推流</button>' +
@@ -943,24 +956,43 @@ function renderSessions(st){
   document.getElementById('sessStatsSummary').textContent = rows.length + ' 个活动推流会话';
 
   if(!rows.length){
-    tbody.innerHTML = '<tr><td colspan="9"><div class="empty-msg">当前没有活跃的点播推流会话。在平台（如 WVP）发起点播即可连通。</div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10"><div class="empty-msg">当前没有活跃的点播推流会话。在平台（如 WVP）发起实时点播或录像回放即可连通。</div></td></tr>';
     return;
   }
 
   tbody.innerHTML = rows.map(function(s){
+    const isPlayback = s.streamType === 'playback';
+    const isDownload = s.streamType === 'download';
+    let typeBadge = '<span class="badge live" style="padding:2px 8px"><span class="dot"></span>实时直播</span>';
+    if(isPlayback){
+      typeBadge = '<span class="badge playback" style="padding:2px 8px"><span class="dot"></span>录像回放</span>';
+    } else if(isDownload){
+      typeBadge = '<span class="badge download" style="padding:2px 8px"><span class="dot"></span>录像下载</span>';
+    }
+
+    let statusHtml = '';
+    if(s.paused){
+      statusHtml = '<span class="badge paused"><span class="dot"></span>已暂停</span>';
+    } else if(s.sourceReady){
+      let scaleText = '';
+      if(isPlayback && s.scale && s.scale !== 1){
+        scaleText = ' (' + s.scale + 'x)';
+      }
+      statusHtml = '<span class="badge on"><span class="dot"></span><span>' + (isPlayback ? ('回放中' + scaleText) : (isDownload ? '下载中' : '实时推流中')) + '</span></span>';
+    } else {
+      statusHtml = '<span class="badge"><span class="dot"></span><span>准备抽流</span></span>';
+    }
+
     return '<tr>' +
       '<td style="font-family:var(--font-mono);font-weight:600">' + esc(s.channelId) + '</td>' +
+      '<td>' + typeBadge + '</td>' +
       '<td style="font-family:var(--font-mono);color:var(--text-muted)">' + esc(s.ssrc) + '</td>' +
       '<td>' + esc(s.remoteIp) + ':' + s.remotePort + '</td>' +
       '<td><span class="badge" style="padding:2px 6px">' + (s.tcp ? 'TCP' : 'UDP') + '</span></td>' +
       '<td style="font-family:var(--font-mono)">' + fmtDuration(s.durationSec||0) + '</td>' +
       '<td style="font-family:var(--font-mono)">' + (s.packetsSent||0).toLocaleString() + ' 包 (' + fmtSize(s.bytesSent||0) + ')</td>' +
       '<td style="font-family:var(--font-mono);color:#38bdf8">' + fmtBitrate(s.bitrateKbps||0) + '</td>' +
-      '<td>' +
-        '<span class="badge ' + (s.sourceReady ? 'on' : '') + '">' +
-          '<span class="dot"></span><span>' + (s.sourceReady ? '实时推流中' : '准备抽流') + '</span>' +
-        '</span>' +
-      '</td>' +
+      '<td>' + statusHtml + '</td>' +
       '<td style="text-align:center">' +
         '<button class="btn btn-danger btn-sm" onclick="stopSession(\'' + esc(s.callId) + '\')">断开</button>' +
       '</td>' +

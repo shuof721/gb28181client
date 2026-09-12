@@ -8,7 +8,7 @@ sip:
   # 本机 SIP 监听（平台需能访问到此地址）
   local_ip: "192.168.20.168"
   local_port: 5070
-  transport: "udp"          # udp | tcp
+  transport: "tcp"          # udp | tcp
   username: "34020000001180000001"   # 通常等于设备国标编号
   password: "12345678"               # 与平台添加设备时的密码一致
   expires: 3600

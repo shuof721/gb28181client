@@ -61,6 +61,9 @@ func New(cfg *config.Config) *Device {
 		})
 	}
 	d.ms = media.NewSessionManager(cfg.Media.LocalIP, cfg.Media.FPS, cfg.Media.RTPPayloadMax, srcFactory)
+	d.ms.OnComplete = func(ch, callID string) {
+		_ = d.SendMediaStatusNotify(ch, "121")
+	}
 	return d
 }
 
@@ -273,7 +276,58 @@ func (d *Device) onSubscribe(m *sip.Message, src net.Addr) {
 }
 
 func (d *Device) onInfo(m *sip.Message, src net.Addr) {
-	// 回放控制 INFO（MANSRTSP）等
+	ct := strings.ToLower(m.GetHeader("Content-Type"))
+	bodyStr := strings.TrimSpace(string(m.Body))
+	isMANSRTSP := strings.Contains(ct, "mansrtsp") ||
+		strings.HasPrefix(bodyStr, "PLAY") ||
+		strings.HasPrefix(bodyStr, "PAUSE") ||
+		strings.HasPrefix(bodyStr, "TEARDOWN")
+
+	if isMANSRTSP {
+		req, err := gb28181.ParseMANSRTSP(m.Body)
+		if err != nil {
+			log.Printf("[device] bad MANSRTSP: %v", err)
+			_ = d.ua.Reply(m, src, 400, "Bad Request", nil, "")
+			return
+		}
+
+		callID := m.CallID()
+		sess := d.ms.GetSession(callID)
+		scale := 1.0
+		rangeNPT := 0.0
+		isPause := false
+
+		if sess != nil {
+			switch req.Method {
+			case "PLAY":
+				if req.HasScale {
+					sess.SetScale(req.Scale)
+				}
+				if req.HasRange {
+					sess.Seek(req.RangeNPT)
+				}
+				sess.Resume()
+				scale = sess.GetScale()
+				rangeNPT = sess.CurrentOffset()
+			case "PAUSE":
+				sess.Pause()
+				isPause = true
+			case "TEARDOWN":
+				sess.Stop()
+				isPause = true
+			}
+			log.Printf("[gb] MANSRTSP %s callID=%s scale=%.2f range=%.2f pause=%v",
+				req.Method, callID, scale, rangeNPT, isPause)
+		} else {
+			log.Printf("[gb] MANSRTSP %s callID=%s (session not found, replying OK)", req.Method, callID)
+		}
+
+		respBody := gb28181.BuildMANSRTSPResponse(req.CSeq, scale, rangeNPT, isPause)
+		_ = d.ua.Reply(m, src, 200, "OK", respBody, "Application/MANSRTSP")
+		return
+	}
+
+	// 其他 INFO（如语音对讲等）
 	log.Printf("[device] INFO content-type=%s body=%s", m.GetHeader("Content-Type"), truncate(string(m.Body), 200))
 	_ = d.ua.Reply(m, src, 200, "OK", nil, "")
 }
@@ -481,39 +535,139 @@ func (d *Device) onDeviceControl(root *gb28181.Root, req *sip.Message, src net.A
 }
 
 func (d *Device) respRecordInfo(root *gb28181.Root, req *sip.Message, src net.Addr) {
-	// 默认返回 0 条，可通过后续扩展假数据
+	var query gb28181.RecordInfoReq
+	if err := unmarshalBody(req.Body, &query); err != nil {
+		log.Printf("[gb] recordinfo parse query failed: %v", err)
+	}
+
+	channelID := root.DeviceID
+	if query.DeviceID != "" {
+		channelID = query.DeviceID
+	}
+	channelName := "通道录像"
+	d.cfgRLock()
+	for _, ch := range d.cfg.Device.Channels {
+		if ch.ID == channelID {
+			channelName = ch.Name
+			break
+		}
+	}
+	d.cfgRUnlock()
+
+	startTimeStr := query.StartTime
+	endTimeStr := query.EndTime
+	now := time.Now()
+	startTime := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	endTime := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, now.Location())
+
+	if t, err := time.Parse("2006-01-02T15:04:05", startTimeStr); err == nil && !t.IsZero() {
+		startTime = t
+	}
+	if t, err := time.Parse("2006-01-02T15:04:05", endTimeStr); err == nil && !t.IsZero() {
+		endTime = t
+	}
+
+	// 动态生成录像切片列表：在起止时间范围内切成若个模拟录像段（每 2 小时一段）
+	items := make([]gb28181.RecordItem, 0)
+	step := 2 * time.Hour
+	cur := startTime
+	for cur.Before(endTime) {
+		segEnd := cur.Add(step)
+		if segEnd.After(endTime) {
+			segEnd = endTime
+		}
+		items = append(items, gb28181.RecordItem{
+			DeviceID:   channelID,
+			Name:       channelName,
+			FilePath:   fmt.Sprintf("/record/%s/%s_%s.mp4", cur.Format("20060102"), cur.Format("150405"), segEnd.Format("150405")),
+			Address:    "LocalDisk",
+			StartTime:  cur.Format("2006-01-02T15:04:05"),
+			EndTime:    segEnd.Format("2006-01-02T15:04:05"),
+			Secrecy:    0,
+			Type:       "time",
+			RecorderID: d.cfg.Device.ID,
+			FileSize:   "104857600",
+		})
+		cur = segEnd
+	}
+
 	var listB strings.Builder
-	listB.WriteString("  <RecordList Num=\"0\">\r\n  </RecordList>\r\n")
+	fmt.Fprintf(&listB, "  <RecordList Num=\"%d\">\r\n", len(items))
+	for _, it := range items {
+		listB.WriteString("    <Item>\r\n")
+		fmt.Fprintf(&listB, "      <DeviceID>%s</DeviceID>\r\n", it.DeviceID)
+		fmt.Fprintf(&listB, "      <Name>%s</Name>\r\n", it.Name)
+		fmt.Fprintf(&listB, "      <FilePath>%s</FilePath>\r\n", it.FilePath)
+		fmt.Fprintf(&listB, "      <Address>%s</Address>\r\n", it.Address)
+		fmt.Fprintf(&listB, "      <StartTime>%s</StartTime>\r\n", it.StartTime)
+		fmt.Fprintf(&listB, "      <EndTime>%s</EndTime>\r\n", it.EndTime)
+		fmt.Fprintf(&listB, "      <Secrecy>%d</Secrecy>\r\n", it.Secrecy)
+		fmt.Fprintf(&listB, "      <Type>%s</Type>\r\n", it.Type)
+		fmt.Fprintf(&listB, "      <RecorderID>%s</RecorderID>\r\n", it.RecorderID)
+		fmt.Fprintf(&listB, "      <FileSize>%s</FileSize>\r\n", it.FileSize)
+		listB.WriteString("    </Item>\r\n")
+	}
+	listB.WriteString("  </RecordList>\r\n")
+
 	body := buildXMLResponse(map[string]any{
 		"CmdType":    "RecordInfo",
 		"SN":         root.SN,
-		"DeviceID":   root.DeviceID,
-		"Name":       "RecordList",
-		"SumNum":     0,
+		"DeviceID":   channelID,
+		"Name":       channelName,
+		"SumNum":     len(items),
 		"RecordList": listB.String(),
 	})
 	_, err := d.ua.SendMessage(body, "Application/MANSCDP+xml")
 	if err != nil {
 		log.Printf("[gb] recordinfo response failed: %v", err)
+	} else {
+		log.Printf("[gb] recordinfo response sent ch=%s records=%d", channelID, len(items))
 	}
+}
+
+func (d *Device) SendMediaStatusNotify(channelID, notifyType string) error {
+	if notifyType == "" {
+		notifyType = "121"
+	}
+	body := buildXMLNotify(map[string]any{
+		"CmdType":    "MediaStatus",
+		"SN":         d.nextSN(),
+		"DeviceID":   channelID,
+		"NotifyType": notifyType,
+	})
+	_, err := d.ua.SendMessage(body, "Application/MANSCDP+xml")
+	if err != nil {
+		log.Printf("[gb] send MediaStatus %s failed: %v", notifyType, err)
+		return err
+	}
+	log.Printf("[gb] MediaStatus Notify sent ch=%s type=%s", channelID, notifyType)
+	return nil
 }
 
 func (d *Device) onInvite(m *sip.Message, src net.Addr) {
 	sdp := string(m.Body)
 	recv, err := media.ParseSDP(sdp)
 	if err != nil {
-		log.Printf("[media] INVITE SDP invalid: %v", err)
-		_ = d.ua.Reply(m, src, 400, "Bad Request", nil, "")
+		log.Printf("[media] INVITE rejected: %v", err)
+		_ = d.ua.Reply(m, src, 488, "Not Acceptable Here", nil, "")
 		return
 	}
 
 	// 从 SDP o= 或 Subject 取通道
 	channelID := extractChannelID(m, recv)
 	callID := m.CallID()
-	log.Printf("[media] INVITE channel=%s s=%s media=%s:%d ssrc=%s",
-		channelID, recv.SessionName, recv.IP, recv.VideoPort, recv.SSRC)
+	sessName := strings.ToLower(recv.SessionName)
+	isPlayback := sessName == "playback" || sessName == "download"
 
-	answer, err := d.ms.StartLive(channelID, callID, recv)
+	log.Printf("[media] INVITE channel=%s s=%s media=%s:%d ssrc=%s t=%s %s",
+		channelID, recv.SessionName, recv.IP, recv.VideoPort, recv.SSRC, recv.StartTime, recv.EndTime)
+
+	var answer string
+	if isPlayback {
+		answer, err = d.ms.StartPlayback(channelID, callID, recv)
+	} else {
+		answer, err = d.ms.StartLive(channelID, callID, recv)
+	}
 	if err != nil {
 		log.Printf("[media] start session failed: %v", err)
 		_ = d.ua.Reply(m, src, 500, "Internal Server Error", nil, "")

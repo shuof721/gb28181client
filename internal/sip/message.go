@@ -180,7 +180,9 @@ func (m *Message) Bytes() []byte {
 		m.Headers = map[string][]string{}
 	}
 	// 用稳定顺序写出常用头，再写其余
-	written := map[string]bool{}
+	written := map[string]bool{
+		"content-length": true,
+	}
 	write := func(name string) {
 		k := strings.ToLower(name)
 		vs, ok := m.Headers[k]
