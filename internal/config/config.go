@@ -68,6 +68,7 @@ type UIConfig struct {
 
 type SIPConfig struct {
 	// 平台侧
+	ServerID   string `yaml:"server_id" json:"server_id"`
 	ServerIP   string `yaml:"server_ip" json:"server_ip"`
 	ServerPort int    `yaml:"server_port" json:"server_port"`
 	// 本地监听
@@ -75,6 +76,8 @@ type SIPConfig struct {
 	LocalPort int    `yaml:"local_port" json:"local_port"`
 	// 传输：udp / tcp
 	Transport string `yaml:"transport" json:"transport"`
+	// 字符编码：GB2312 / UTF-8
+	Charset   string `yaml:"charset" json:"charset"`
 	// 注册
 	Username string `yaml:"username" json:"username"` // 通常等于 DeviceID
 	Password string `yaml:"password" json:"password"`
@@ -238,11 +241,13 @@ type LoggingConfig struct {
 func Default() *Config {
 	return &Config{
 		SIP: SIPConfig{
+			ServerID:              "34020000002000000001",
 			ServerIP:              "127.0.0.1",
 			ServerPort:            5060,
 			LocalIP:               "127.0.0.1",
 			LocalPort:             5070,
 			Transport:             "udp",
+			Charset:               "GB2312",
 			Username:              "34020000001180000001",
 			Password:              "12345678",
 			Expires:               3600,
@@ -328,6 +333,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.SIP.Transport == "" {
 		c.SIP.Transport = "udp"
+	}
+	if c.SIP.Charset == "" {
+		c.SIP.Charset = "GB2312"
+	}
+	if c.SIP.ServerID == "" && len(c.SIP.Username) >= 10 {
+		c.SIP.ServerID = c.SIP.Username[:10] + "2000000001"
 	}
 	if c.SIP.Expires <= 0 {
 		c.SIP.Expires = 3600

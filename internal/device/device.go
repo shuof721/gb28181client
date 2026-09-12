@@ -35,6 +35,8 @@ type Device struct {
 	ptzMu  sync.RWMutex
 	ptzMap map[string]*ChannelPTZ
 
+	alarmMgr *AlarmManager
+
 	OnConfigChanged func(cfg *config.Config)
 }
 
@@ -45,12 +47,16 @@ func New(cfg *config.Config) *Device {
 		cfg.SIP.Transport,
 		cfg.SIP.Username, cfg.SIP.Password,
 	)
+	if cfg.SIP.ServerID != "" {
+		ua.SetServerID(cfg.SIP.ServerID)
+	}
 	d := &Device{
-		cfg:    cfg,
-		ua:     ua,
-		stopCh: make(chan struct{}),
-		logs:   NewLogBuffer(800),
-		ptzMap: make(map[string]*ChannelPTZ),
+		cfg:      cfg,
+		ua:       ua,
+		stopCh:   make(chan struct{}),
+		logs:     NewLogBuffer(800),
+		ptzMap:   make(map[string]*ChannelPTZ),
+		alarmMgr: NewAlarmManager(),
 	}
 	srcFactory := func(channelID string) (media.H264Source, error) {
 		d.cfgRLock()
@@ -150,6 +156,10 @@ func (d *Device) Stop() {
 	}
 }
 
+func (d *Device) AlarmManager() *AlarmManager {
+	return d.alarmMgr
+}
+
 func (d *Device) Status() Status {
 	sess := d.ms.ListSessions()
 	sessions := make([]any, 0, len(sess))
@@ -161,13 +171,24 @@ func (d *Device) Status() Status {
 	chs := make([]ChannelStatus, 0, len(d.cfg.Device.Channels))
 	for _, ch := range d.cfg.Device.Channels {
 		v := d.cfg.Media.OptionsFor(ch.ID)
+		gSt := "ResetGuard"
+		dSt := "OFFDUTY"
+		isAlm := false
+		if d.alarmMgr != nil {
+			gSt = d.alarmMgr.GetGuard(ch.ID)
+			dSt = d.alarmMgr.DutyStatus(ch.ID)
+			isAlm = d.alarmMgr.IsAlarming(ch.ID)
+		}
 		chs = append(chs, ChannelStatus{
-			ID:     ch.ID,
-			Name:   ch.Name,
-			Status: ch.Status,
-			MP4:    v.MP4,
-			Source: v.Kind,
-			H264:   v.H264,
+			ID:          ch.ID,
+			Name:        ch.Name,
+			Status:      ch.Status,
+			GuardStatus: gSt,
+			DutyStatus:  dSt,
+			IsAlarming:  isAlm,
+			MP4:         v.MP4,
+			Source:      v.Kind,
+			H264:        v.H264,
 		})
 	}
 	mode := d.cfg.Media.Mode
@@ -180,6 +201,17 @@ func (d *Device) Status() Status {
 	d.cfgRUnlock()
 
 	talkSessions := d.tm.ListSessions()
+
+	guardStatus := "ResetGuard"
+	dutyStatus := "OFFDUTY"
+	autoAlarm := false
+	var recentAlarms []AlarmEventRecord
+	if d.alarmMgr != nil {
+		guardStatus = d.alarmMgr.GetGuard("")
+		dutyStatus = d.alarmMgr.DutyStatus(deviceID)
+		autoAlarm = d.alarmMgr.IsAutoAlarmRunning()
+		recentAlarms = d.alarmMgr.ListRecords(50)
+	}
 
 	up := int64(0)
 	if !d.startedAt.IsZero() {
@@ -194,6 +226,10 @@ func (d *Device) Status() Status {
 		Transport:    transport,
 		MediaMode:    mode,
 		MediaSource:  src,
+		GuardStatus:  guardStatus,
+		DutyStatus:   dutyStatus,
+		AutoAlarm:    autoAlarm,
+		Alarms:       recentAlarms,
 		Channels:     chs,
 		Sessions:     sessions,
 		TalkSessions: talkSessions,
@@ -339,12 +375,12 @@ func (d *Device) keepaliveLoop() {
 }
 
 func (d *Device) sendKeepalive() error {
-	body, err := gb28181.MarshalXML(gb28181.KeepaliveNotify{
+	body, err := gb28181.MarshalXMLWithCharset(gb28181.KeepaliveNotify{
 		CmdType:  "Keepalive",
 		SN:       d.nextSN(),
 		DeviceID: d.cfg.Device.ID,
 		Status:   "OK",
-	})
+	}, d.getCharset())
 	if err != nil {
 		return err
 	}
@@ -367,10 +403,21 @@ func (d *Device) onNotify(m *sip.Message, src net.Addr) {
 }
 
 func (d *Device) onSubscribe(m *sip.Message, src net.Addr) {
-	// 平台订阅报警/目录等，回复 200
-	resp := d.ua.Reply(m, src, 200, "OK", nil, "")
-	_ = resp
-	// 有些平台期望 Event 头在响应里
+	ev := m.GetHeader("Event")
+	log.Printf("[sip] recv SUBSCRIBE Event=%s from=%s Call-ID=%s", ev, src, m.CallID())
+
+	extraHeaders := func(resp *sip.Message) {
+		if ev != "" {
+			resp.SetHeader("Event", ev)
+		}
+		expires := m.GetHeader("Expires")
+		if expires == "" {
+			expires = "3600"
+		}
+		resp.SetHeader("Expires", expires)
+	}
+
+	_ = d.ua.ReplyExtra(m, src, 200, "OK", extraHeaders, nil, "")
 }
 
 func (d *Device) onInfo(m *sip.Message, src net.Addr) {
@@ -433,6 +480,11 @@ func (d *Device) onInfo(m *sip.Message, src net.Addr) {
 }
 
 func (d *Device) onMessage(m *sip.Message, src net.Addr) {
+	// 动态学习对端平台 SIP ID（如 34020000002000000001）
+	if fromUser := m.FromUser(); fromUser != "" && len(fromUser) >= 10 {
+		d.ua.SetServerID(fromUser)
+	}
+
 	// 先 200
 	if err := d.ua.Reply(m, src, 200, "OK", nil, ""); err != nil {
 		log.Printf("[device] reply MESSAGE 200 failed: %v", err)
@@ -490,50 +542,58 @@ func (d *Device) handleMANSCDP(root *gb28181.Root, m *sip.Message, src net.Addr)
 }
 
 func (d *Device) replyMANSCDP(root *gb28181.Root, req *sip.Message, src net.Addr, fields map[string]any) {
-	// 构造 Response 根
-	type response struct {
-		XMLName  struct{} `xml:"Response"`
-		CmdType  string   `xml:"CmdType"`
-		SN       string   `xml:"SN"`
-		DeviceID string   `xml:"DeviceID"`
+	body := d.buildXMLResponse(fields)
+	targetID := ""
+	if req != nil {
+		targetID = req.FromUser()
 	}
-	// 直接用 map 不支持 xml 根名，改为手写更通用
-	body := buildXMLResponse(fields)
-	// 平台期望响应走 SIP MESSAGE（不是对原 MESSAGE 的 200 里带 body）
-	// GB28181：查询响应通过新的 MESSAGE 发给平台
-	_, err := d.ua.SendMessage(body, "Application/MANSCDP+xml")
+	if targetID == "" {
+		targetID = d.ua.GetServerID()
+	}
+	// 平台期望响应走 SIP MESSAGE（通过新事务发往对端平台 ID）
+	_, err := d.ua.SendMessageTo(targetID, body, "Application/MANSCDP+xml")
 	if err != nil {
-		log.Printf("[gb] send response failed: %v", err)
+		log.Printf("[gb] send response to %s failed: %v", targetID, err)
 	}
 }
 
+func (d *Device) getCharset() string {
+	d.cfgRLock()
+	defer d.cfgRUnlock()
+	if d.cfg != nil && d.cfg.SIP.Charset != "" {
+		return d.cfg.SIP.Charset
+	}
+	return "GB2312"
+}
+
+func (d *Device) buildXMLResponse(fields map[string]any) []byte {
+	data, err := gb28181.BuildXML("Response", fields, d.getCharset())
+	if err != nil {
+		log.Printf("[gb] buildXMLResponse failed: %v", err)
+		return nil
+	}
+	return data
+}
+
+func (d *Device) buildXMLNotify(fields map[string]any) []byte {
+	data, err := gb28181.BuildXML("Notify", fields, d.getCharset())
+	if err != nil {
+		log.Printf("[gb] buildXMLNotify failed: %v", err)
+		return nil
+	}
+	return data
+}
+
+// buildXMLResponse 兼容包级调用
 func buildXMLResponse(fields map[string]any) []byte {
-	var b strings.Builder
-	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\r\n")
-	b.WriteString("<Response>\r\n")
-	// 稳定字段顺序
-	order := []string{"CmdType", "SN", "DeviceID", "Result", "SumNum", "DeviceName", "Manufacturer", "Model", "Firmware", "Channel", "Online", "Status", "Encode", "Record", "DeviceTime"}
-	written := map[string]bool{}
-	for _, k := range order {
-		if v, ok := fields[k]; ok {
-			fmt.Fprintf(&b, "  <%s>%v</%s>\r\n", k, v, k)
-			written[k] = true
-		}
-	}
-	for k, v := range fields {
-		if written[k] || k == "DeviceList" || k == "RecordList" {
-			continue
-		}
-		fmt.Fprintf(&b, "  <%s>%v</%s>\r\n", k, v, k)
-	}
-	if dl, ok := fields["DeviceList"].(string); ok {
-		b.WriteString(dl)
-	}
-	if rl, ok := fields["RecordList"].(string); ok {
-		b.WriteString(rl)
-	}
-	b.WriteString("</Response>\r\n")
-	return []byte(b.String())
+	data, _ := gb28181.BuildXML("Response", fields, "GB2312")
+	return data
+}
+
+// buildXMLNotify 兼容包级调用
+func buildXMLNotify(fields map[string]any) []byte {
+	data, _ := gb28181.BuildXML("Notify", fields, "GB2312")
+	return data
 }
 
 func (d *Device) respCatalog(root *gb28181.Root, req *sip.Message, src net.Addr) {
@@ -591,23 +651,27 @@ func (d *Device) respCatalog(root *gb28181.Root, req *sip.Message, src net.Addr)
 	}
 	listB.WriteString("  </DeviceList>\r\n")
 
-	body := buildXMLResponse(map[string]any{
+	body := d.buildXMLResponse(map[string]any{
 		"CmdType":    "Catalog",
 		"SN":         root.SN,
 		"DeviceID":   root.DeviceID, // 平台请求里的 DeviceID，通常是设备 ID
 		"SumNum":     len(items),
 		"DeviceList": listB.String(),
 	})
-	_, err := d.ua.SendMessage(body, "Application/MANSCDP+xml")
+	targetID := req.FromUser()
+	if targetID == "" {
+		targetID = d.ua.GetServerID()
+	}
+	_, err := d.ua.SendMessageTo(targetID, body, "Application/MANSCDP+xml")
 	if err != nil {
 		log.Printf("[gb] catalog response failed: %v", err)
 	} else {
-		log.Printf("[gb] catalog response sent, channels=%d", len(items))
+		log.Printf("[gb] catalog response sent to %s, channels=%d", targetID, len(items))
 	}
 }
 
 func (d *Device) respDeviceInfo(root *gb28181.Root, req *sip.Message, src net.Addr) {
-	body := buildXMLResponse(map[string]any{
+	body := d.buildXMLResponse(map[string]any{
 		"CmdType":      "DeviceInfo",
 		"SN":           root.SN,
 		"DeviceID":     d.cfg.Device.ID,
@@ -617,29 +681,72 @@ func (d *Device) respDeviceInfo(root *gb28181.Root, req *sip.Message, src net.Ad
 		"Firmware":     d.cfg.Device.Firmware,
 		"Channel":      len(d.cfg.Device.Channels),
 	})
-	_, err := d.ua.SendMessage(body, "Application/MANSCDP+xml")
+	targetID := req.FromUser()
+	if targetID == "" {
+		targetID = d.ua.GetServerID()
+	}
+	_, err := d.ua.SendMessageTo(targetID, body, "Application/MANSCDP+xml")
 	if err != nil {
 		log.Printf("[gb] deviceinfo response failed: %v", err)
 	} else {
-		log.Printf("[gb] deviceinfo response sent")
+		log.Printf("[gb] deviceinfo response sent to %s", targetID)
 	}
 }
 
 func (d *Device) respDeviceStatus(root *gb28181.Root, req *sip.Message, src net.Addr) {
-	body := buildXMLResponse(map[string]any{
-		"CmdType":    "DeviceStatus",
-		"SN":         root.SN,
-		"DeviceID":   d.cfg.Device.ID,
-		"Result":     "OK",
-		"Online":     "ONLINE",
-		"Status":     "OK",
-		"Encode":     "ON",
-		"Record":     "OFF",
-		"DeviceTime": time.Now().Format("2006-01-02T15:04:05"),
+	d.cfgRLock()
+	channels := d.cfg.Device.Channels
+	devID := d.cfg.Device.ID
+	d.cfgRUnlock()
+
+	var asBuilder strings.Builder
+	if len(channels) == 0 {
+		duty := "OFFDUTY"
+		if d.alarmMgr != nil {
+			duty = d.alarmMgr.DutyStatus(devID)
+		}
+		asBuilder.WriteString("  <Alarmstatus Num=\"1\">\r\n")
+		asBuilder.WriteString("    <Item>\r\n")
+		fmt.Fprintf(&asBuilder, "      <DeviceID>%s</DeviceID>\r\n", devID)
+		fmt.Fprintf(&asBuilder, "      <DutyStatus>%s</DutyStatus>\r\n", duty)
+		asBuilder.WriteString("    </Item>\r\n")
+		asBuilder.WriteString("  </Alarmstatus>\r\n")
+	} else {
+		fmt.Fprintf(&asBuilder, "  <Alarmstatus Num=\"%d\">\r\n", len(channels))
+		for _, ch := range channels {
+			duty := "OFFDUTY"
+			if d.alarmMgr != nil {
+				duty = d.alarmMgr.DutyStatus(ch.ID)
+			}
+			asBuilder.WriteString("    <Item>\r\n")
+			fmt.Fprintf(&asBuilder, "      <DeviceID>%s</DeviceID>\r\n", ch.ID)
+			fmt.Fprintf(&asBuilder, "      <DutyStatus>%s</DutyStatus>\r\n", duty)
+			asBuilder.WriteString("    </Item>\r\n")
+		}
+		asBuilder.WriteString("  </Alarmstatus>\r\n")
+	}
+
+	body := d.buildXMLResponse(map[string]any{
+		"CmdType":     "DeviceStatus",
+		"SN":          root.SN,
+		"DeviceID":    devID,
+		"Result":      "OK",
+		"Online":      "ONLINE",
+		"Status":      "OK",
+		"Encode":      "ON",
+		"Record":      "OFF",
+		"DeviceTime":  time.Now().Format("2006-01-02T15:04:05"),
+		"Alarmstatus": asBuilder.String(),
 	})
-	_, err := d.ua.SendMessage(body, "Application/MANSCDP+xml")
+	targetID := req.FromUser()
+	if targetID == "" {
+		targetID = d.ua.GetServerID()
+	}
+	_, err := d.ua.SendMessageTo(targetID, body, "Application/MANSCDP+xml")
 	if err != nil {
 		log.Printf("[gb] devicestatus response failed: %v", err)
+	} else {
+		log.Printf("[gb] devicestatus response sent to %s (channels=%d)", targetID, len(channels))
 	}
 }
 
@@ -649,12 +756,77 @@ func (d *Device) onDeviceControl(root *gb28181.Root, req *sip.Message, src net.A
 		log.Printf("[gb] devicecontrol parse: %v", err)
 	}
 
-	channelID := root.DeviceID
+	channelID := strings.TrimSpace(ctrl.DeviceID)
+	if channelID == "" {
+		channelID = strings.TrimSpace(root.DeviceID)
+	}
+	channelID = config.NormalizeGBID(channelID)
 	if channelID == "" {
 		channelID = d.cfg.Device.ID
 	}
 
-	if ctrl.PTZCmd != "" {
+	d.cfgRLock()
+	allChs := make([]string, 0, len(d.cfg.Device.Channels))
+	for _, c := range d.cfg.Device.Channels {
+		allChs = append(allChs, c.ID)
+	}
+	rootDevID := d.cfg.Device.ID
+	d.cfgRUnlock()
+
+	guardCmd := strings.TrimSpace(ctrl.GuardCmd)
+	if guardCmd == "" {
+		guardCmd = strings.TrimSpace(ctrl.Info.GuardCmd)
+	}
+	alarmCmd := strings.TrimSpace(ctrl.AlarmCmd)
+	if alarmCmd == "" {
+		alarmCmd = strings.TrimSpace(ctrl.Info.AlarmCmd)
+	}
+
+	if guardCmd != "" {
+		isGuard := strings.EqualFold(guardCmd, "SetGuard") || guardCmd == "1" || strings.EqualFold(guardCmd, "On")
+		if d.alarmMgr != nil {
+			if channelID == rootDevID || channelID == "" {
+				d.alarmMgr.SetGuard("", isGuard, allChs)
+				d.alarmMgr.SetGuard(rootDevID, isGuard, allChs)
+			} else {
+				d.alarmMgr.SetGuard(channelID, isGuard)
+			}
+		}
+		log.Printf("[gb] DeviceControl GuardCmd=%s on %s => isGuard=%v (cascaded=%v)", guardCmd, channelID, isGuard, channelID == rootDevID)
+		go d.replyMANSCDP(root, req, src, map[string]any{
+			"CmdType":  "DeviceControl",
+			"SN":       root.SN,
+			"DeviceID": channelID,
+			"Result":   "OK",
+		})
+	} else if alarmCmd != "" {
+		isReset := strings.EqualFold(alarmCmd, "ResetAlarm") || alarmCmd == "1" || strings.EqualFold(alarmCmd, "Reset")
+		if isReset {
+			if d.alarmMgr != nil {
+				if channelID == rootDevID || channelID == "" {
+					d.alarmMgr.ResetAlarm("", allChs)
+					d.alarmMgr.ResetAlarm(rootDevID, allChs)
+				} else {
+					d.alarmMgr.ResetAlarm(channelID)
+				}
+			}
+			log.Printf("[gb] DeviceControl AlarmCmd=%s on %s => Reset OK", alarmCmd, channelID)
+			go d.replyMANSCDP(root, req, src, map[string]any{
+				"CmdType":  "DeviceControl",
+				"SN":       root.SN,
+				"DeviceID": channelID,
+				"Result":   "OK",
+			})
+		}
+	} else if ctrl.TeleBoot != "" {
+		log.Printf("[gb] DeviceControl TeleBoot=%s on %s => Reboot OK", ctrl.TeleBoot, channelID)
+		go d.replyMANSCDP(root, req, src, map[string]any{
+			"CmdType":  "DeviceControl",
+			"SN":       root.SN,
+			"DeviceID": channelID,
+			"Result":   "OK",
+		})
+	} else if ctrl.PTZCmd != "" {
 		ptzCmd, err := gb28181.ParsePTZCmd(ctrl.PTZCmd)
 		if err != nil {
 			log.Printf("[gb] DeviceControl parse PTZCmd '%s' failed: %v", ctrl.PTZCmd, err)
@@ -683,7 +855,6 @@ func (d *Device) onDeviceControl(root *gb28181.Root, req *sip.Message, src net.A
 	} else {
 		log.Printf("[gb] DeviceControl CmdType=%s DeviceID=%s", root.CmdType, root.DeviceID)
 	}
-	// 控制类一般无需 MESSAGE 回业务响应，仅 SIP 200（已在 onMessage 回过）
 }
 
 func (d *Device) respPresetQuery(root *gb28181.Root, req *sip.Message, src net.Addr) {
@@ -712,15 +883,19 @@ func (d *Device) respPresetQuery(root *gb28181.Root, req *sip.Message, src net.A
 		})
 	}
 
-	body, err := gb28181.MarshalXML(&resp)
+	body, err := gb28181.MarshalXMLWithCharset(&resp, d.getCharset())
 	if err != nil {
 		log.Printf("[gb] marshal presetquery response failed: %v", err)
 		return
 	}
-	if _, err := d.ua.SendMessage(body, "Application/MANSCDP+xml"); err != nil {
+	targetID := req.FromUser()
+	if targetID == "" {
+		targetID = d.ua.GetServerID()
+	}
+	if _, err := d.ua.SendMessageTo(targetID, body, "Application/MANSCDP+xml"); err != nil {
 		log.Printf("[gb] presetquery response failed: %v", err)
 	} else {
-		log.Printf("[gb] presetquery response sent for %s, presets=%d", channelID, len(prs))
+		log.Printf("[gb] presetquery response sent to %s for %s, presets=%d", targetID, channelID, len(prs))
 	}
 }
 
@@ -746,12 +921,17 @@ func (d *Device) respRecordInfo(root *gb28181.Root, req *sip.Message, src net.Ad
 	nvrID := d.cfg.Device.ID
 	d.cfgRUnlock()
 
+	targetID := req.FromUser()
+	if targetID == "" {
+		targetID = d.ua.GetServerID()
+	}
+
 	items := GenerateRecordItems(recCfg, channelID, channelName, nvrID, query.StartTime, query.EndTime, query.Type)
 	total := len(items)
 
 	const maxItemsPerPacket = 30
 	if total == 0 {
-		body := buildXMLResponse(map[string]any{
+		body := d.buildXMLResponse(map[string]any{
 			"CmdType":    "RecordInfo",
 			"SN":         root.SN,
 			"DeviceID":   channelID,
@@ -759,10 +939,10 @@ func (d *Device) respRecordInfo(root *gb28181.Root, req *sip.Message, src net.Ad
 			"SumNum":     0,
 			"RecordList": "  <RecordList Num=\"0\">\r\n  </RecordList>\r\n",
 		})
-		if _, err := d.ua.SendMessage(body, "Application/MANSCDP+xml"); err != nil {
+		if _, err := d.ua.SendMessageTo(targetID, body, "Application/MANSCDP+xml"); err != nil {
 			log.Printf("[gb] recordinfo response (0 items) failed: %v", err)
 		} else {
-			log.Printf("[gb] recordinfo response sent ch=%s records=0", channelID)
+			log.Printf("[gb] recordinfo response sent to %s ch=%s records=0", targetID, channelID)
 		}
 		return
 	}
@@ -794,7 +974,7 @@ func (d *Device) respRecordInfo(root *gb28181.Root, req *sip.Message, src net.Ad
 		}
 		listB.WriteString("  </RecordList>\r\n")
 
-		body := buildXMLResponse(map[string]any{
+		body := d.buildXMLResponse(map[string]any{
 			"CmdType":    "RecordInfo",
 			"SN":         root.SN,
 			"DeviceID":   channelID,
@@ -803,21 +983,21 @@ func (d *Device) respRecordInfo(root *gb28181.Root, req *sip.Message, src net.Ad
 			"RecordList": listB.String(),
 		})
 
-		if _, err := d.ua.SendMessage(body, "Application/MANSCDP+xml"); err != nil {
+		if _, err := d.ua.SendMessageTo(targetID, body, "Application/MANSCDP+xml"); err != nil {
 			log.Printf("[gb] recordinfo response packet %d failed: %v", packetIdx, err)
 		}
 		if end < total {
 			time.Sleep(15 * time.Millisecond) // 避免 UDP 连发丢包
 		}
 	}
-	log.Printf("[gb] recordinfo response sent ch=%s total=%d packets=%d", channelID, total, packetIdx)
+	log.Printf("[gb] recordinfo response sent to %s ch=%s total=%d packets=%d", targetID, channelID, total, packetIdx)
 }
 
 func (d *Device) SendMediaStatusNotify(channelID, notifyType string) error {
 	if notifyType == "" {
 		notifyType = "121"
 	}
-	body := buildXMLNotify(map[string]any{
+	body := d.buildXMLNotify(map[string]any{
 		"CmdType":    "MediaStatus",
 		"SN":         d.nextSN(),
 		"DeviceID":   channelID,
@@ -828,7 +1008,7 @@ func (d *Device) SendMediaStatusNotify(channelID, notifyType string) error {
 		log.Printf("[gb] send MediaStatus %s failed: %v", notifyType, err)
 		return err
 	}
-	log.Printf("[gb] MediaStatus Notify sent ch=%s type=%s", channelID, notifyType)
+	log.Printf("[gb] MediaStatus notify sent ch=%s type=%s", channelID, notifyType)
 	return nil
 }
 

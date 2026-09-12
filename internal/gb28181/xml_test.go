@@ -74,3 +74,57 @@ func TestParseRecordInfoQuery(t *testing.T) {
 	}
 }
 
+func TestBuildXMLGB2312(t *testing.T) {
+	fields := map[string]any{
+		"CmdType":          "Alarm",
+		"SN":               "123",
+		"DeviceID":         "34020000001320000001",
+		"AlarmPriority":    "3",
+		"AlarmMethod":      "5",
+		"AlarmTime":        "2026-09-13T00:00:00",
+		"AlarmDescription": "通道1画面移动侦测报警",
+		"Info":             "<AlarmType>2</AlarmType>",
+	}
+	xmlBytes, err := BuildXML("Notify", fields, "GB2312")
+	if err != nil {
+		t.Fatalf("BuildXML failed: %v", err)
+	}
+
+	// 验证可以被 unmarshalXML (结合 GBK/GB2312 decoder) 正常解析
+	var notify AlarmNotify
+	if err := Unmarshal(xmlBytes, &notify); err != nil {
+		t.Fatalf("Unmarshal GB2312 XML failed: %v", err)
+	}
+	if notify.CmdType != "Alarm" || notify.AlarmMethod != "5" || notify.Info.AlarmType != "2" {
+		t.Fatalf("parsed unexpected notify: %+v", notify)
+	}
+	if notify.AlarmDescription != "通道1画面移动侦测报警" {
+		t.Fatalf("expected Chinese description, got: %s", notify.AlarmDescription)
+	}
+}
+
+func TestDeviceControlReqParsingLenient(t *testing.T) {
+	// 测试包含 Info 嵌套和带空格的 DeviceControl
+	body := []byte(`<?xml version="1.0" encoding="gb2312"?>
+<Control>
+  <CmdType>DeviceControl</CmdType>
+  <SN>9988</SN>
+  <DeviceID> 34020000001320000001 </DeviceID>
+  <GuardCmd> SetGuard </GuardCmd>
+  <Info>
+    <AlarmCmd> ResetAlarm </AlarmCmd>
+  </Info>
+</Control>`)
+	var ctrl DeviceControlReq
+	if err := Unmarshal(body, &ctrl); err != nil {
+		t.Fatalf("Unmarshal DeviceControlReq failed: %v", err)
+	}
+	if ctrl.CmdType != "DeviceControl" {
+		t.Fatalf("expected DeviceControl, got %s", ctrl.CmdType)
+	}
+	if ctrl.Info.AlarmCmd != " ResetAlarm " {
+		t.Fatalf("expected Info.AlarmCmd, got %s", ctrl.Info.AlarmCmd)
+	}
+}
+
+

@@ -43,26 +43,33 @@ func (b *LogBuffer) Tail(n int) []string {
 
 // Status 对外状态快照。
 type Status struct {
-	Registered bool      `json:"registered"`
-	DeviceID   string    `json:"deviceId"`
-	DeviceName string    `json:"deviceName"`
-	Server     string    `json:"server"`
-	Local      string    `json:"local"`
-	Transport  string    `json:"transport"`
-	MediaMode  string    `json:"mediaMode"`
-	MediaSource string   `json:"mediaSource"`
-	Channels     []ChannelStatus        `json:"channels"`
-	Sessions     []any                  `json:"sessions"`
+	Registered   bool                    `json:"registered"`
+	DeviceID     string                  `json:"deviceId"`
+	DeviceName   string                  `json:"deviceName"`
+	Server       string                  `json:"server"`
+	Local        string                  `json:"local"`
+	Transport    string                  `json:"transport"`
+	MediaMode    string                  `json:"mediaMode"`
+	MediaSource  string                  `json:"mediaSource"`
+	GuardStatus  string                  `json:"guardStatus"` // "SetGuard" (已布防) | "ResetGuard" (已撤防)
+	DutyStatus   string                  `json:"dutyStatus"`  // "ONDUTY" (在防) | "OFFDUTY" (撤防) | "ALARM" (报警中)
+	AutoAlarm    bool                    `json:"autoAlarm"`
+	Alarms       []AlarmEventRecord      `json:"alarms"`
+	Channels     []ChannelStatus         `json:"channels"`
+	Sessions     []any                   `json:"sessions"`
 	TalkSessions []media.TalkSessionInfo `json:"talkSessions"`
-	UptimeSec    int64                  `json:"uptimeSec"`
-	StartedAt  time.Time `json:"startedAt"`
+	UptimeSec    int64                   `json:"uptimeSec"`
+	StartedAt    time.Time               `json:"startedAt"`
 }
 
 type ChannelStatus struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Status string `json:"status"`
-	MP4    string `json:"mp4"`
-	H264   string `json:"h264"`
-	Source string `json:"source"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Status      string `json:"status"`
+	GuardStatus string `json:"guardStatus,omitempty"` // 该通道布防状态 SetGuard | ResetGuard
+	DutyStatus  string `json:"dutyStatus,omitempty"`  // 国标防区状态 ONDUTY | OFFDUTY | ALARM
+	IsAlarming  bool   `json:"isAlarming"`            // 是否处于报警激活中
+	MP4         string `json:"mp4"`
+	H264        string `json:"h264"`
+	Source      string `json:"source"`
 }

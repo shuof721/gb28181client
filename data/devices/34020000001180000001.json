@@ -1,11 +1,13 @@
 {
   "enabled": true,
   "sip": {
+    "server_id": "34020000002000000001",
     "server_ip": "192.168.42.198",
     "server_port": 8116,
     "local_ip": "192.168.42.198",
     "local_port": 5070,
     "transport": "tcp",
+    "charset": "GB2312",
     "username": "34020000001180000001",
     "password": "12345678",
     "expires": 3600,

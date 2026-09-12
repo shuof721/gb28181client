@@ -487,6 +487,7 @@ select{cursor:pointer}
       <div class="tab-group">
         <button class="tab-btn active" onclick="switchWorkbenchTab('channels', this)">通道列表与视频源</button>
         <button class="tab-btn" id="tabBtnSessions" onclick="switchWorkbenchTab('sessions', this)">实时点播与对讲</button>
+        <button class="tab-btn" id="tabBtnAlarms" onclick="switchWorkbenchTab('alarms', this)">🚨 报警与布防联动</button>
         <button class="tab-btn" onclick="switchWorkbenchTab('logs', this)">设备运行日志</button>
         <button class="tab-btn" onclick="switchWorkbenchTab('records', this)">虚拟录像排程与查询</button>
       </div>
@@ -522,6 +523,89 @@ select{cursor:pointer}
       </div>
       <div id="sessionListContainer">
         <!-- Sessions rendered here -->
+      </div>
+    </div>
+
+    <!-- Tab: Alarms & Guard Control -->
+    <div class="panel-body" id="tabAlarms" style="display:none">
+      <div style="display:grid;grid-template-columns:1fr 1.6fr;gap:16px;margin-bottom:16px">
+        <!-- Guard & Auto-Alarm Control Card -->
+        <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px">
+          <div style="font-weight:700;font-size:13px;color:var(--text-main);margin-bottom:10px;display:flex;align-items:center;justify-content:space-between">
+            <span>🛡️ 设备整机布撤防 (Global Guard)</span>
+            <span id="alarmGuardOverallBadge" class="badge">初始状态</span>
+          </div>
+          <div style="font-size:11px;color:var(--text-dim);line-height:1.5;margin-bottom:12px">
+            支持 GB/T 28181 附录 A.2.3 平台布撤防指令 (<code>SetGuard</code> / <code>ResetGuard</code> / <code>ResetAlarm</code>)。整机设防将一键同步下属所有通道。
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+            <button class="btn btn-sm btn-primary" onclick="setDeviceGuardState('SetGuard')">🛡️ 全局整机布防 (SetGuard)</button>
+            <button class="btn btn-sm" onclick="setDeviceGuardState('ResetGuard')">🔓 全局整机撤防 (ResetGuard)</button>
+            <button class="btn btn-sm btn-danger" onclick="setDeviceGuardState('ResetAlarm')">🔕 全局复位报警 (ResetAlarm)</button>
+          </div>
+          
+          <div style="border-top:1px dashed var(--border);padding-top:12px">
+            <div style="font-weight:700;font-size:12px;color:var(--text-main);margin-bottom:6px;display:flex;align-items:center;justify-content:space-between">
+              <span>⏱️ 周期性自动报警生成器</span>
+              <span id="autoAlarmBadge" class="badge off">未启用</span>
+            </div>
+            <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">自动按设定的时间间隔轮询<b>已布防</b>通道向平台发送国标报警通知。</div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <label style="font-size:12px;color:var(--text-muted)">间隔(秒):</label>
+              <input type="number" id="autoAlarmInterval" value="15" min="3" max="3600" style="width:70px"/>
+              <button class="btn btn-sm" id="btnToggleAutoAlarm" onclick="toggleAutoAlarm()">开启自动报警</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Trigger Toolbox -->
+        <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px">
+          <div style="font-weight:700;font-size:13px;color:var(--text-main);margin-bottom:10px;display:flex;align-items:center;justify-content:space-between">
+            <span>⚡ 快捷报警模拟工具箱 (Quick Trigger)</span>
+            <button class="btn btn-sm btn-primary" onclick="openAlarmModal()">自定义高级报警...</button>
+          </div>
+          <div style="font-size:11px;color:var(--text-dim);margin-bottom:10px">
+            向国标平台发送符合 <code>GB/T 28181-2016 附录 A.2.2.1 表 A.2</code> 规范的 <code>Notify &gt; CmdType Alarm</code> 报文。字符集采用 GB2312 对齐 WVP。<br/>
+            ⚠️ 规范注意：移动侦测属于<b>视频报警 (Method 5 / Type 2)</b>；若误用设备报警 (Method 2 / Type 2) 则在国标中为<b>设备防拆报警</b>。
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+            <label style="font-size:12px;color:var(--text-muted);font-weight:600">目标通道:</label>
+            <select id="quickAlarmChannelSelect" style="flex:1;min-width:220px;font-size:12px;font-weight:600;color:var(--primary);background:var(--surface-3);border:1px solid var(--border);border-radius:4px;padding:4px 8px" onchange="updateQuickAlarmChannelBadge()"></select>
+            <span id="quickAlarmChannelBadge" class="badge on" style="font-size:11px">默认第1通道</span>
+            <label style="font-size:11px;color:var(--text-dim);display:inline-flex;align-items:center;gap:4px">
+              <input type="checkbox" id="quickAlarmForce"/> 强制测试发送 (忽略撤防门禁)
+            </label>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(170px, 1fr));gap:8px">
+            <button class="btn btn-sm" style="border-color:#f59e0b;color:#f59e0b" onclick="triggerQuickAlarm('motion')">🏃 移动侦测 (Method 5 / Type 2)</button>
+            <button class="btn btn-sm" style="border-color:#ef4444;color:#ef4444" onclick="triggerQuickAlarm('intrusion')">🚨 周界入侵 (Method 5 / Type 6)</button>
+            <button class="btn btn-sm" style="border-color:#eab308;color:#eab308" onclick="triggerQuickAlarm('tamper')">🖐️ 视频遮挡 (Method 5 / Type 11)</button>
+            <button class="btn btn-sm" style="border-color:#ec4899;color:#ec4899" onclick="triggerQuickAlarm('videoloss')">📹 视频丢失 (Method 5 / Type 1)</button>
+            <button class="btn btn-sm" style="border-color:#dc2626;color:#dc2626" onclick="triggerQuickAlarm('sos')">🆘 紧急求助 (Method 2 / 1级豁免)</button>
+            <button class="btn btn-sm" style="border-color:#6366f1;color:#6366f1" onclick="triggerQuickAlarm('diskfault')">💾 存储故障 (Method 6 / Type 21)</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Channel Guard Management Card -->
+      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:13px;color:var(--text-main);margin-bottom:6px;display:flex;align-items:center;justify-content:space-between">
+          <span>🎯 各通道独立防区布撤防与状态管理 (Channel Duty & Guard Status)</span>
+          <span style="font-size:11px;font-weight:normal;color:var(--text-dim)">对应国标 <code>DeviceStatus &gt; Alarmstatus</code> 各通道汇报</span>
+        </div>
+        <div id="channelGuardTableContainer" style="overflow-x:auto"></div>
+      </div>
+
+      <!-- Real-time Alarm History Table -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="font-weight:700;font-size:12px;color:var(--text-main)">📜 最近报警上报历史记录 (实时存储近100条)</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-sm btn-danger" onclick="clearDeviceAlarms()">🗑️ 清空历史</button>
+          <button class="btn btn-sm" onclick="loadDeviceAlarms()">🔄 刷新记录</button>
+        </div>
+      </div>
+      <div id="alarmHistoryContainer" style="overflow-x:auto;max-height:360px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm)">
+        <!-- Alarm history table rendered here -->
       </div>
     </div>
 
@@ -676,6 +760,19 @@ select{cursor:pointer}
           <div class="form-group">
             <label class="form-label">平台 SIP 服务端端口</label>
             <input type="number" id="cfgSipServerPort"/>
+          </div>
+        </div>
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label">平台国标编号 (Server ID)</label>
+            <input type="text" id="cfgSipServerId" placeholder="例如 34020000002000000001 (可自动学习)"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">XML 字符编码 (Charset)</label>
+            <select id="cfgSipCharset">
+              <option value="GB2312">GB2312 (推荐对接 WVP / 海康 / 大华等)</option>
+              <option value="UTF-8">UTF-8 (部分现代云平台)</option>
+            </select>
           </div>
         </div>
         <div class="form-grid-3">
@@ -949,38 +1046,71 @@ select{cursor:pointer}
 <div class="modal-mask" id="alarmModal">
   <div class="modal-box">
     <div class="modal-head">
-      <h3>发送国标模拟报警通知</h3>
+      <h3>发送国标模拟报警通知 (GB/T 28181 附录 D)</h3>
       <button class="btn btn-sm" onclick="closeModal('alarmModal')">✕</button>
     </div>
     <div class="modal-body">
       <div class="form-group">
-        <label class="form-label">报警通道</label>
+        <label class="form-label">报警通道或设备编码 (DeviceID)</label>
         <select id="alarmChannelSelect"></select>
       </div>
       <div class="form-grid-2">
         <div class="form-group">
           <label class="form-label">报警方式 (AlarmMethod)</label>
           <select id="alarmMethodSelect">
-            <option value="2">2 - 移动侦测报警</option>
-            <option value="1">1 - 电话线报警</option>
-            <option value="3">3 - 视频丢失报警</option>
-            <option value="4">4 - 视频遮挡报警</option>
-            <option value="5">5 - 外部探测器报警</option>
+            <option value="5">5 - 视频报警 (移动侦测/周界/遮挡/丢失等)</option>
+            <option value="2">2 - 设备报警 (探头/门磁/红外/人工求助)</option>
+            <option value="6">6 - 设备故障报警 (硬盘故障/满/掉电/断网)</option>
+            <option value="1">1 - 电话报警</option>
+            <option value="3">3 - 短信报警</option>
+            <option value="4">4 - GPS报警</option>
+            <option value="7">7 - 其他报警</option>
           </select>
         </div>
         <div class="form-group">
-          <label class="form-label">报警级别 (Priority)</label>
-          <select id="alarmPrioritySelect">
-            <option value="4">4 - 低级 (默认)</option>
-            <option value="3">3 - 中级</option>
-            <option value="2">2 - 高级</option>
-            <option value="1">1 - 一级 (最高)</option>
+          <label class="form-label">报警事件子类型 (AlarmType)</label>
+          <select id="alarmTypeSelect">
+            <option value="2">2 - 移动侦测报警 (视频)</option>
+            <option value="6">6 - 周界防区入侵报警 (视频)</option>
+            <option value="5">5 - 警戒绊线越界报警 (视频) / 人工求助 (设备)</option>
+            <option value="11">11 - 视频遮挡或镜头篡改 (视频)</option>
+            <option value="1">1 - 视频信号丢失 (视频) / 门磁开关 (设备)</option>
+            <option value="21">21 - 存储设备/硬盘满或故障 (故障)</option>
+            <option value="22">22 - 网络通信链路断开 (故障)</option>
+            <option value="51">51 - 区域违章停车/违规停留 (视频)</option>
+            <option value="0">0 - 未指定子类型</option>
           </select>
         </div>
       </div>
-      <div class="form-group">
-        <label class="form-label">报警描述文本</label>
-        <input type="text" id="alarmDescInput" value="Web 控制台触发模拟移动侦测"/>
+      <div class="form-grid-2">
+        <div class="form-group">
+          <label class="form-label">报警级别 (Priority)</label>
+          <select id="alarmPrioritySelect">
+            <option value="3">3 - 三级警情 (普通日常)</option>
+            <option value="2">2 - 二级警情 (重要严重)</option>
+            <option value="1">1 - 一级警情 (最高紧急/24h豁免)</option>
+            <option value="4">4 - 四级警情 (轻微/提示)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">报警描述文本 (AlarmDescription)</label>
+          <input type="text" id="alarmDescInput" value="Web 控制台触发模拟移动侦测"/>
+        </div>
+      </div>
+      <div class="form-grid-2">
+        <div class="form-group">
+          <label class="form-label">发生经度 (Longitude, 可选)</label>
+          <input type="number" step="0.000001" id="alarmLonInput" placeholder="例如 116.397458"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">发生纬度 (Latitude, 可选)</label>
+          <input type="number" step="0.000001" id="alarmLatInput" placeholder="例如 39.909187"/>
+        </div>
+      </div>
+      <div style="margin-top:8px">
+        <label style="font-size:12px;color:var(--text-muted);display:inline-flex;align-items:center;gap:6px">
+          <input type="checkbox" id="alarmForceCheck"/> 强制测试发送 (即使通道处于撤防状态也向平台发送 Notify 报文)
+        </label>
       </div>
     </div>
     <div class="modal-foot">
@@ -1197,8 +1327,10 @@ function switchWorkbenchTab(tab, btn){
   btn.classList.add('active');
   document.getElementById('tabChannels').style.display = (tab==='channels' ? 'block' : 'none');
   document.getElementById('tabSessions').style.display = (tab==='sessions' ? 'block' : 'none');
+  document.getElementById('tabAlarms').style.display = (tab==='alarms' ? 'block' : 'none');
   document.getElementById('tabLogs').style.display = (tab==='logs' ? 'block' : 'none');
   document.getElementById('tabRecords').style.display = (tab==='records' ? 'block' : 'none');
+  if(tab==='alarms') loadDeviceAlarms();
   if(tab==='logs') loadLogs();
   if(tab==='records') loadDeviceRecords();
 }
@@ -1327,7 +1459,12 @@ async function loadActiveDeviceDetail(){
     (st.registered ? '<span class="badge on"><span class="dot"></span>已连接平台</span>' : '<span class="badge warn"><span class="dot"></span>运行中(鉴权中)</span>') :
     '<span class="badge stopped"><span class="dot"></span>已停止</span>';
 
+  let guardBadge = (st.guardStatus === 'SetGuard') ?
+    '<span class="badge on"><span class="dot"></span>🛡️ 已布防</span>' :
+    (st.guardStatus === 'ResetGuard' ? '<span class="badge off"><span class="dot"></span>🔓 已撤防</span>' : '');
+
   document.getElementById('workbenchBadges').innerHTML = stBadge +
+    guardBadge +
     '<span class="badge"><span class="dot"></span>本地端口: ' + esc(sipCfg.local_port) + '</span>' +
     '<span class="badge"><span class="dot"></span>平台: ' + esc(sipCfg.server_ip) + ':' + esc(sipCfg.server_port) + '</span>';
 
@@ -1347,9 +1484,23 @@ async function loadActiveDeviceDetail(){
       tabBtn.innerHTML = '实时点播与对讲';
     }
   }
+  const tabBtnAlarms = document.getElementById('tabBtnAlarms');
+  if(tabBtnAlarms){
+    if(st.autoAlarm && st.autoAlarm.enabled){
+      tabBtnAlarms.innerHTML = '🚨 报警与布防 <span style="background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700">自动上报中</span>';
+    } else if(st.guardStatus === 'SetGuard'){
+      tabBtnAlarms.innerHTML = '🚨 报警与布防 <span style="background:#10b981;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700">已布防</span>';
+    } else {
+      tabBtnAlarms.innerHTML = '🚨 报警与布防联动';
+    }
+  }
+  renderAlarmsTab(st);
   updateRecordChannelOptions(devCfg.channels || [], activeDeviceId);
   if(document.getElementById('tabRecords').style.display !== 'none'){
     loadDeviceRecords();
+  }
+  if(document.getElementById('tabAlarms').style.display !== 'none'){
+    loadDeviceAlarms();
   }
 }
 
@@ -1380,16 +1531,25 @@ function renderChannels(channels, mediaCfg, sessions){
     else if(boundMp4) boundLabel = boundMp4.split('/').pop();
     else if(boundH264) boundLabel = boundH264.split('/').pop();
 
+    let dutyBadge = '';
+    if(ch.dutyStatus === 'ALARM' || ch.isAlarming){
+      dutyBadge = '<span class="badge" style="background:#dc2626;color:#fff"><span class="dot"></span>🚨 报警中</span>';
+    } else if(ch.guardStatus === 'SetGuard' || ch.dutyStatus === 'ONDUTY'){
+      dutyBadge = '<span class="badge on"><span class="dot"></span>🛡️ 已布防</span>';
+    } else {
+      dutyBadge = '<span class="badge off"><span class="dot"></span>🔓 已撤防</span>';
+    }
+
     return '<div class="ch-card ' + (isLive ? 'live' : '') + '">' +
       '<div class="ch-header">' +
         '<div>' +
           '<div class="ch-name">' + esc(ch.name) + '</div>' +
           '<div class="ch-id">' + esc(ch.id) + '</div>' +
         '</div>' +
-        '<div>' +
-          (isLive ? '<span class="badge live"><span class="dot"></span>推流中</span>' :
-            (ch.status === 'ON' ? '<span class="badge on"><span class="dot"></span>在线</span>' : '<span class="badge off"><span class="dot"></span>离线</span>')
-          ) +
+        '<div style="display:flex;gap:4px;align-items:center">' +
+          (isLive ? '<span class="badge live"><span class="dot"></span>推流中</span>' : '') +
+          dutyBadge +
+          (ch.status === 'ON' ? '<span class="badge on"><span class="dot"></span>在线</span>' : '<span class="badge off"><span class="dot"></span>离线</span>') +
         '</div>' +
       '</div>' +
       '<div style="font-size:11px;color:var(--text-dim);display:flex;flex-direction:column;gap:4px">' +
@@ -1408,6 +1568,13 @@ function renderChannels(channels, mediaCfg, sessions){
         '</select>' +
         '<button class="btn btn-sm btn-primary" onclick="bindChannelMedia(\'' + esc(ch.id) + '\', this)">绑定</button>' +
         '<button class="btn btn-sm" onclick="openPTZModal(\'' + esc(ch.id) + '\',\'' + esc(ch.name) + '\')">🕹️ 云台与预置位</button>' +
+        (ch.dutyStatus === 'ALARM' || ch.isAlarming ?
+          '<button class="btn btn-sm btn-danger" onclick="setChannelGuardState(\'' + esc(ch.id) + '\',\'ResetAlarm\')">🔕 复位报警</button>' : ''
+        ) +
+        (ch.guardStatus === 'SetGuard' ?
+          '<button class="btn btn-sm" onclick="setChannelGuardState(\'' + esc(ch.id) + '\',\'ResetGuard\')">🔓 撤防</button>' :
+          '<button class="btn btn-sm btn-primary" onclick="setChannelGuardState(\'' + esc(ch.id) + '\',\'SetGuard\')">🛡️ 布防</button>'
+        ) +
         '<button class="btn btn-sm" onclick="toggleChannelStatus(\'' + esc(ch.id) + '\',\'' + (ch.status==='ON'?'OFF':'ON') + '\')">' + (ch.status==='ON'?'设为离线':'设为在线') + '</button>' +
         '<button class="btn btn-sm btn-danger" onclick="removeChannel(\'' + esc(ch.id) + '\')">删除</button>' +
       '</div>' +
@@ -2015,6 +2182,8 @@ async function openDeviceConfigModal(id, defaultTab){
   // SIP
   document.getElementById('cfgSipServerIp').value = sip.server_ip || '127.0.0.1';
   document.getElementById('cfgSipServerPort').value = sip.server_port || 5060;
+  document.getElementById('cfgSipServerId').value = sip.server_id || '';
+  document.getElementById('cfgSipCharset').value = sip.charset || 'GB2312';
   document.getElementById('cfgSipLocalIp').value = sip.local_ip || '127.0.0.1';
   document.getElementById('cfgSipLocalPort').value = sip.local_port || 5070;
   document.getElementById('cfgSipTransport').value = sip.transport || 'udp';
@@ -2067,6 +2236,8 @@ async function saveDeviceConfig(restart){
   // Update SIP
   p.sip.server_ip = document.getElementById('cfgSipServerIp').value.trim();
   p.sip.server_port = parseInt(document.getElementById('cfgSipServerPort').value) || 5060;
+  p.sip.server_id = document.getElementById('cfgSipServerId').value.trim();
+  p.sip.charset = document.getElementById('cfgSipCharset').value;
   p.sip.local_ip = document.getElementById('cfgSipLocalIp').value.trim();
   p.sip.local_port = parseInt(document.getElementById('cfgSipLocalPort').value) || 5070;
   p.sip.transport = document.getElementById('cfgSipTransport').value;
@@ -2172,11 +2343,13 @@ async function submitCreateDevice(){
   const profile = {
     enabled: true,
     sip: {
+      server_id: id.substring(0, 10) + '2000000001',
       server_ip: sIp,
       server_port: sPort,
       local_ip: lIp,
       local_port: lPort,
       transport: transport,
+      charset: 'GB2312',
       username: id,
       password: pwd,
       expires: 3600,
@@ -2338,34 +2511,355 @@ function stopSession(callId){
   });
 }
 
-// Alarm
+// Alarm & Guard Control
 function openAlarmModal(){
   const sel = document.getElementById('alarmChannelSelect');
   const chs = (activeDeviceData && activeDeviceData.profile && activeDeviceData.profile.device && activeDeviceData.profile.device.channels) || [];
   if(chs.length){
     sel.innerHTML = chs.map(function(c){
       return '<option value="' + esc(c.id) + '">' + esc(c.name) + ' (' + esc(c.id) + ')</option>';
-    }).join('');
+    }).join('') + '<option value="' + esc(activeDeviceId) + '">主设备编码 (' + esc(activeDeviceId) + ')</option>';
   } else {
     sel.innerHTML = '<option value="' + esc(activeDeviceId) + '">主设备 (' + esc(activeDeviceId) + ')</option>';
   }
   openModal('alarmModal');
 }
+
 async function submitAlarm(){
   const chId = document.getElementById('alarmChannelSelect').value;
   const method = document.getElementById('alarmMethodSelect').value;
+  const type = document.getElementById('alarmTypeSelect').value;
   const priority = document.getElementById('alarmPrioritySelect').value;
   const desc = document.getElementById('alarmDescInput').value.trim();
+  const lon = parseFloat(document.getElementById('alarmLonInput').value) || 0;
+  const lat = parseFloat(document.getElementById('alarmLatInput').value) || 0;
+  const force = document.getElementById('alarmForceCheck') ? document.getElementById('alarmForceCheck').checked : false;
 
   const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/alarm', 'POST', {
     channelId: chId,
     alarmMethod: method,
+    alarmType: type,
     priority: priority,
-    description: desc
+    description: desc,
+    longitude: lon,
+    latitude: lat,
+    force: force
   });
   if(j && j.ok){
-    showToast('模拟报警通知已成功发出', 'success');
+    showToast('模拟报警通知已成功发出 (' + (j.record && j.record.latencyMs || 0) + 'ms) · 通道已切换为 ALARM', 'success');
     closeModal('alarmModal');
+    refreshAll();
+  } else if(j && j.suppressed){
+    showToast('⚠️ 撤防门禁拦截: ' + j.error, 'warn');
+    closeModal('alarmModal');
+    refreshAll();
+  } else if(j && j.error){
+    showToast('报警上报失败: ' + j.error, 'error');
+  }
+}
+
+async function loadDeviceAlarms(){
+  if(!activeDeviceId) return;
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/alarms?limit=100');
+  if(j && j.records){
+    renderAlarmHistory(j.records);
+  }
+}
+
+async function clearDeviceAlarms(){
+  if(!activeDeviceId) return;
+  if(!confirm('确定要清空当前设备的所有报警历史记录吗？')) return;
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/alarms/clear', 'POST');
+  if(j && j.ok){
+    showToast('已清空所有本地报警历史记录', 'success');
+    loadDeviceAlarms();
+  }
+}
+
+function renderAlarmHistory(records){
+  const container = document.getElementById('alarmHistoryContainer');
+  if(!container) return;
+  if(!records || !records.length){
+    container.innerHTML = '<div style="color:var(--text-dim);padding:24px;text-align:center">暂无报警上报记录。可点击上方快捷按钮或自定义高级报警模拟发送事件。</div>';
+    return;
+  }
+
+  const methodNames = {
+    '1': '1 - 电话报警',
+    '2': '2 - 设备报警 (探头/SOS)',
+    '3': '3 - 短信报警',
+    '4': '4 - GPS/位置',
+    '5': '5 - 视频报警',
+    '6': '6 - 设备故障报警',
+    '7': '7 - 其他报警'
+  };
+  const typeNames = {
+    '1': '1 - 视频丢失',
+    '2': '2 - 移动侦测',
+    '5': '5 - 绊线越界 / SOS求助',
+    '6': '6 - 周界入侵',
+    '11': '11 - 视频遮挡/镜头篡改',
+    '21': '21 - 存储设备故障/满',
+    '22': '22 - 通信断开',
+    '51': '51 - 违章停车'
+  };
+
+  let rows = records.map(function(r, idx){
+    const mStr = methodNames[r.alarmMethod] || (r.alarmMethod ? (r.alarmMethod + '号方式') : '-');
+    const tStr = typeNames[r.alarmType] || (r.alarmType && r.alarmType !== '0' ? (r.alarmType + '号类型') : '-');
+    const priBadge = (r.priority === '1' || r.priority === 1) ? '<span class="badge off" style="font-size:10px">1级(最高紧急)</span>' :
+      (r.priority === '2' || r.priority === 2) ? '<span class="badge warn" style="font-size:10px">2级(重要)</span>' :
+      '<span class="badge" style="font-size:10px">' + (r.priority || 4) + '级</span>';
+
+    let statusBadge = '';
+    if(r.status === 'confirmed'){
+      statusBadge = '<span class="badge on" style="font-size:10px">200 OK (' + (r.latencyMs || 0) + 'ms)</span>';
+    } else if(r.status === 'suppressed'){
+      statusBadge = '<span class="badge warn" style="font-size:10px" title="撤防状态拦截上报">⚠️ 撤防门禁拦截</span>';
+    } else {
+      statusBadge = '<span class="badge off" style="font-size:10px">失败</span>';
+    }
+
+    return '<tr>' +
+      '<td style="color:var(--text-dim)">' + (idx + 1) + '</td>' +
+      '<td style="font-family:var(--font-mono);color:#93c5fd">' + esc(r.time) + '</td>' +
+      '<td style="font-family:var(--font-mono);font-size:11px">' + esc(r.channelId) + '</td>' +
+      '<td>' + esc(mStr) + '</td>' +
+      '<td>' + esc(tStr) + '</td>' +
+      '<td>' + priBadge + '</td>' +
+      '<td>' + statusBadge + '</td>' +
+      '<td style="color:var(--text-main);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(r.description) + '">' + esc(r.description || '-') + '</td>' +
+    '</tr>';
+  }).join('');
+
+  container.innerHTML = '<table class="rec-table">' +
+    '<thead>' +
+      '<tr>' +
+        '<th style="width:36px">#</th>' +
+        '<th>上报时间</th>' +
+        '<th>报警通道/设备</th>' +
+        '<th>报警方式</th>' +
+        '<th>事件类型</th>' +
+        '<th>级别</th>' +
+        '<th>平台响应</th>' +
+        '<th>描述文本</th>' +
+      '</tr>' +
+    '</thead>' +
+    '<tbody>' + rows + '</tbody>' +
+  '</table>';
+}
+
+function renderChannelGuardTable(channels){
+  const container = document.getElementById('channelGuardTableContainer');
+  if(!container) return;
+  if(!channels || !channels.length){
+    container.innerHTML = '<div style="color:var(--text-dim);padding:14px;text-align:center">该设备暂无配置通道。可在上方配置下挂通道。</div>';
+    return;
+  }
+
+  let rows = channels.map(function(ch){
+    let dutyBadge = '<span class="badge off"><span class="dot"></span>OFFDUTY 已撤防</span>';
+    if(ch.dutyStatus === 'ALARM' || ch.isAlarming){
+      dutyBadge = '<span class="badge" style="background:#dc2626;color:#fff"><span class="dot"></span>🚨 ALARM 报警中</span>';
+    } else if(ch.dutyStatus === 'ONDUTY' || ch.guardStatus === 'SetGuard'){
+      dutyBadge = '<span class="badge on"><span class="dot"></span>🛡️ ONDUTY 已布防</span>';
+    }
+
+    return '<tr>' +
+      '<td style="font-weight:700;color:#fff">' + esc(ch.name) + '</td>' +
+      '<td style="font-family:var(--font-mono);font-size:11px">' + esc(ch.id) + '</td>' +
+      '<td>' + dutyBadge + '</td>' +
+      '<td>' +
+        '<div style="display:flex;gap:6px;align-items:center">' +
+          (ch.guardStatus === 'SetGuard' ?
+            '<button class="btn btn-sm" onclick="setChannelGuardState(\'' + esc(ch.id) + '\',\'ResetGuard\')">🔓 单独撤防</button>' :
+            '<button class="btn btn-sm btn-primary" onclick="setChannelGuardState(\'' + esc(ch.id) + '\',\'SetGuard\')">🛡️ 单独布防</button>'
+          ) +
+          (ch.dutyStatus === 'ALARM' || ch.isAlarming ?
+            '<button class="btn btn-sm btn-danger" onclick="setChannelGuardState(\'' + esc(ch.id) + '\',\'ResetAlarm\')">🔕 报警复位</button>' :
+            '<button class="btn btn-sm" onclick="setChannelGuardState(\'' + esc(ch.id) + '\',\'ResetAlarm\')">🔕 复位</button>'
+          ) +
+        '</div>' +
+      '</td>' +
+    '</tr>';
+  }).join('');
+
+  container.innerHTML = '<table class="rec-table">' +
+    '<thead>' +
+      '<tr>' +
+        '<th>通道名称</th>' +
+        '<th>国标编码 (DeviceID)</th>' +
+        '<th>国标防区状态 (DutyStatus)</th>' +
+        '<th>通道独立设防控制</th>' +
+      '</tr>' +
+    '</thead>' +
+    '<tbody>' + rows + '</tbody>' +
+  '</table>';
+}
+
+function renderAlarmsTab(st){
+  const overallBadge = document.getElementById('alarmGuardOverallBadge');
+  if(overallBadge){
+    if(st.guardStatus === 'SetGuard' || st.dutyStatus === 'ONDUTY'){
+      overallBadge.className = 'badge on';
+      overallBadge.innerHTML = '<span class="dot"></span>已布防 (SetGuard / ONDUTY)';
+    } else if(st.guardStatus === 'ResetGuard' || st.dutyStatus === 'OFFDUTY'){
+      overallBadge.className = 'badge off';
+      overallBadge.innerHTML = '<span class="dot"></span>已撤防 (ResetGuard / OFFDUTY)';
+    } else {
+      overallBadge.className = 'badge';
+      overallBadge.innerHTML = '初始未设防';
+    }
+  }
+
+  const quickChSel = document.getElementById('quickAlarmChannelSelect');
+  if(quickChSel && activeDeviceData && activeDeviceData.profile && activeDeviceData.profile.device){
+    const chs = activeDeviceData.profile.device.channels || [];
+    const prev = quickChSel.value;
+    quickChSel.innerHTML = chs.map(function(c, idx){
+      return '<option value="' + esc(c.id) + '">' + (idx === 0 ? '【默认第1通道】' : '【通道】') + esc(c.name) + ' (' + esc(c.id) + ')</option>';
+    }).join('') + '<option value="' + esc(activeDeviceId) + '">【主设备根节点】' + esc(activeDeviceId) + '</option>';
+    if(prev) quickChSel.value = prev;
+    updateQuickAlarmChannelBadge();
+  }
+
+  renderChannelGuardTable(st.channels || []);
+
+  const autoBadge = document.getElementById('autoAlarmBadge');
+  const btnToggle = document.getElementById('btnToggleAutoAlarm');
+  const intervalInput = document.getElementById('autoAlarmInterval');
+  if(autoBadge && btnToggle){
+    const auto = st.autoAlarm || {};
+    if(auto.enabled){
+      autoBadge.className = 'badge on';
+      autoBadge.innerHTML = '<span class="dot"></span>运行中 (每 ' + (auto.intervalSec || 15) + ' 秒)';
+      btnToggle.className = 'btn btn-sm btn-danger';
+      btnToggle.textContent = '停止自动报警';
+    } else {
+      autoBadge.className = 'badge off';
+      autoBadge.innerHTML = '<span class="dot"></span>已停止';
+      btnToggle.className = 'btn btn-sm btn-primary';
+      btnToggle.textContent = '开启自动报警';
+    }
+    if(intervalInput && auto.intervalSec) intervalInput.value = auto.intervalSec;
+  }
+
+  loadDeviceAlarms();
+}
+
+function updateQuickAlarmChannelBadge(){
+  const sel = document.getElementById('quickAlarmChannelSelect');
+  const badge = document.getElementById('quickAlarmChannelBadge');
+  if(!sel || !badge) return;
+  const opt = sel.options[sel.selectedIndex];
+  if(opt){
+    const nameOnly = opt.text.replace(/【.*?】/, '').split('(')[0].trim();
+    badge.textContent = '当前目标: ' + nameOnly;
+    badge.className = 'badge on';
+  }
+}
+
+async function setDeviceGuardState(cmd){
+  if(!activeDeviceId) return;
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/guard', 'POST', {
+    guardCmd: cmd
+  });
+  if(j && j.ok){
+    showToast('整机布防控制指令已生效: ' + cmd, 'success');
+    refreshAll();
+  }
+}
+
+async function setChannelGuardState(channelId, cmd){
+  if(!activeDeviceId) return;
+  let body = { channelId: channelId };
+  if(cmd === 'ResetAlarm'){
+    body.alarmCmd = 'ResetAlarm';
+  } else {
+    body.guardCmd = cmd;
+  }
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/guard', 'POST', body);
+  if(j && j.ok){
+    showToast('通道 [' + channelId + '] 防区指令已生效: ' + cmd, 'success');
+    refreshAll();
+  }
+}
+
+async function toggleAutoAlarm(){
+  if(!activeDeviceId) return;
+  const st = (activeDeviceData && activeDeviceData.status) || {};
+  const currentAuto = st.autoAlarm || {};
+  const nextEnabled = !currentAuto.enabled;
+  const interval = parseInt(document.getElementById('autoAlarmInterval').value) || 15;
+
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/alarm/auto', 'POST', {
+    enabled: nextEnabled,
+    intervalSec: interval
+  });
+  if(j && j.ok){
+    showToast(nextEnabled ? ('已开启周期自动报警 (间隔 ' + interval + ' 秒，仅针对已布防通道)') : '已停止周期自动报警', nextEnabled ? 'success' : 'info');
+    refreshAll();
+  }
+}
+
+async function triggerQuickAlarm(kind){
+  if(!activeDeviceId) return;
+  const chs = (activeDeviceData && activeDeviceData.profile && activeDeviceData.profile.device && activeDeviceData.profile.device.channels) || [];
+  let sel = document.getElementById('quickAlarmChannelSelect');
+  let chId = (sel && sel.value) ? sel.value : (chs.length > 0 ? chs[0].id : activeDeviceId);
+  let selOpt = sel ? sel.options[sel.selectedIndex] : null;
+  let chLabel = selOpt ? selOpt.text.replace(/【.*?】/, '').split('(')[0].trim() : chId;
+  let force = document.getElementById('quickAlarmForce') ? document.getElementById('quickAlarmForce').checked : false;
+
+  let body = { channelId: chId, priority: '3', alarmMethod: '5', alarmType: '2', description: '通道模拟报警', force: force };
+  switch(kind){
+    case 'motion':
+      body.alarmMethod = '5'; // 视频报警 (Method 5)
+      body.alarmType = '2';   // 运动目标检测 (Type 2，国标 Table A.2: 移动侦测报警)
+      body.priority = '3';
+      body.description = 'Web控制台触发：画面移动侦测报警';
+      break;
+    case 'intrusion':
+      body.alarmMethod = '5'; // 视频报警
+      body.alarmType = '6';   // 周界入侵
+      body.priority = '2';
+      body.description = 'Web控制台触发：防区周界入侵报警';
+      break;
+    case 'tamper':
+      body.alarmMethod = '5'; // 视频报警
+      body.alarmType = '11';  // 视频遮挡
+      body.priority = '3';
+      body.description = 'Web控制台触发：摄像机镜头被遮挡或篡改';
+      break;
+    case 'videoloss':
+      body.alarmMethod = '5'; // 视频报警
+      body.alarmType = '1';   // 视频丢失
+      body.priority = '2';
+      body.description = 'Web控制台触发：视频信号丢失报警';
+      break;
+    case 'sos':
+      body.alarmMethod = '2'; // 设备报警 (Method 2)
+      body.alarmType = '5';   // 人工求助 (SOS)
+      body.priority = '1';    // 一级最高紧急 (具有24h豁免权)
+      body.description = 'Web控制台触发：人工紧急报警/求助触发';
+      break;
+    case 'diskfault':
+      body.alarmMethod = '6'; // 设备故障 (Method 6)
+      body.alarmType = '21';  // 存储介质故障
+      body.priority = '2';
+      body.description = 'Web控制台触发：存储介质故障/硬盘满';
+      break;
+  }
+
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/alarm', 'POST', body);
+  if(j && j.ok){
+    showToast('【' + chLabel + '】报警上报成功 (200 OK) · 通道已切换为 ALARM', 'success');
+    refreshAll();
+  } else if(j && j.suppressed){
+    showToast('⚠️ 撤防门禁拦截【' + chLabel + '】: ' + j.error, 'warn');
+    refreshAll();
+  } else if(j && j.error){
+    showToast('【' + chLabel + '】报警上报失败: ' + j.error, 'error');
   }
 }
 

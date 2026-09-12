@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/local/gb28181-device/internal/config"
 	"github.com/local/gb28181-device/internal/device"
@@ -125,7 +126,19 @@ func (s *Server) handleDeviceDispatch(w http.ResponseWriter, r *http.Request) {
 	case "keepalive":
 		s.handleDeviceKeepalive(w, r, id)
 	case "alarm":
-		s.handleDeviceAlarm(w, r, id)
+		if len(parts) >= 3 && parts[2] == "auto" {
+			s.handleDeviceAlarmAuto(w, r, id)
+		} else {
+			s.handleDeviceAlarm(w, r, id)
+		}
+	case "alarms":
+		if len(parts) >= 3 && parts[2] == "clear" {
+			s.handleDeviceAlarmsClear(w, r, id)
+		} else {
+			s.handleDeviceAlarms(w, r, id)
+		}
+	case "guard":
+		s.handleDeviceGuard(w, r, id)
 	case "session":
 		if len(parts) >= 3 && parts[2] == "stop" {
 			s.handleDeviceStopSession(w, r, id)
@@ -386,10 +399,14 @@ func (s *Server) handleDeviceAlarm(w http.ResponseWriter, r *http.Request, id st
 	}
 
 	var req struct {
-		ChannelID   string `json:"channelId"`
-		AlarmMethod string `json:"alarmMethod"`
-		Priority    string `json:"priority"`
-		Description string `json:"description"`
+		ChannelID   string  `json:"channelId"`
+		AlarmMethod string  `json:"alarmMethod"`
+		AlarmType   string  `json:"alarmType"`
+		Priority    string  `json:"priority"`
+		Description string  `json:"description"`
+		Longitude   float64 `json:"longitude"`
+		Latitude    float64 `json:"latitude"`
+		Force       bool    `json:"force"`
 	}
 	if strings.Contains(r.Header.Get("Content-Type"), "application/json") {
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -408,26 +425,206 @@ func (s *Server) handleDeviceAlarm(w http.ResponseWriter, r *http.Request, id st
 	if req.AlarmMethod == "" {
 		req.AlarmMethod = r.URL.Query().Get("method")
 		if req.AlarmMethod == "" {
-			req.AlarmMethod = "2" // 默认移动侦测
+			req.AlarmMethod = "5" // 默认：视频报警
+		}
+	}
+	if req.AlarmType == "" {
+		req.AlarmType = r.URL.Query().Get("type")
+		if req.AlarmType == "" {
+			req.AlarmType = "2" // 默认：移动侦测
 		}
 	}
 	if req.Priority == "" {
 		req.Priority = r.URL.Query().Get("priority")
 		if req.Priority == "" {
-			req.Priority = "4"
+			req.Priority = "3"
 		}
 	}
 	if req.Description == "" {
 		req.Description = r.URL.Query().Get("desc")
-		if req.Description == "" {
-			req.Description = "Web 控制台模拟报警"
-		}
 	}
-	if err := dev.SendAlarmAdvanced(req.ChannelID, req.AlarmMethod, req.Priority, req.Description); err != nil {
+	if !req.Force && (r.URL.Query().Get("force") == "true" || r.URL.Query().Get("force") == "1") {
+		req.Force = true
+	}
+
+	rec, err := dev.SendAlarmEvent(req.ChannelID, req.AlarmMethod, req.AlarmType, req.Priority, req.Description, req.Longitude, req.Latitude, req.Force)
+	if err != nil {
+		if rec != nil && rec.Status == "suppressed" {
+			writeJSON(w, 200, map[string]any{"ok": false, "suppressed": true, "error": err.Error(), "record": rec})
+			return
+		}
 		writeErr(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]string{"ok": "alarm sent", "device": id, "channel": req.ChannelID})
+	writeJSON(w, 200, map[string]any{"ok": true, "record": rec})
+}
+
+func (s *Server) handleDeviceAlarms(w http.ResponseWriter, r *http.Request, id string) {
+	dev, err := s.mgr.GetDevice(id)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	am := dev.AlarmManager()
+	if am == nil {
+		writeJSON(w, 200, map[string]any{"records": []any{}, "guardStatus": "ResetGuard", "dutyStatus": "OFFDUTY", "autoAlarm": false})
+		return
+	}
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 {
+			limit = v
+		}
+	}
+	writeJSON(w, 200, map[string]any{
+		"guardStatus": am.GetGuard(""),
+		"dutyStatus":  am.DutyStatus(id),
+		"autoAlarm":   am.IsAutoAlarmRunning(),
+		"records":     am.ListRecords(limit),
+	})
+}
+
+func (s *Server) handleDeviceAlarmsClear(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	dev, err := s.mgr.GetDevice(id)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	am := dev.AlarmManager()
+	if am != nil {
+		am.ClearRecords()
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) handleDeviceGuard(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	dev, err := s.mgr.GetDevice(id)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	var req struct {
+		ChannelID string `json:"channelId"`
+		Guard     bool   `json:"guard"`
+		Status    string `json:"status"`
+		GuardCmd  string `json:"guardCmd"`
+		AlarmCmd  string `json:"alarmCmd"`
+	}
+	if strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	cmd := req.GuardCmd
+	if cmd == "" {
+		cmd = req.Status
+	}
+	if cmd == "" {
+		cmd = r.URL.Query().Get("guardCmd")
+	}
+	if cmd == "" {
+		cmd = r.URL.Query().Get("status")
+	}
+
+	isGuard := req.Guard
+	if cmd != "" {
+		if strings.EqualFold(cmd, "SetGuard") {
+			isGuard = true
+		} else if strings.EqualFold(cmd, "ResetGuard") {
+			isGuard = false
+		}
+	}
+	if req.ChannelID == "" {
+		req.ChannelID = r.URL.Query().Get("channel")
+	}
+
+	st := dev.Status()
+	allChs := make([]string, 0, len(st.Channels))
+	for _, ch := range st.Channels {
+		allChs = append(allChs, ch.ID)
+	}
+
+	am := dev.AlarmManager()
+	if am != nil {
+		if strings.EqualFold(req.AlarmCmd, "ResetAlarm") || strings.EqualFold(cmd, "ResetAlarm") {
+			if req.ChannelID == "" || req.ChannelID == st.DeviceID {
+				am.ResetAlarm("", allChs)
+				am.ResetAlarm(st.DeviceID, allChs)
+			} else {
+				am.ResetAlarm(req.ChannelID)
+			}
+		} else {
+			if req.ChannelID == "" || req.ChannelID == st.DeviceID {
+				am.SetGuard("", isGuard, allChs)
+				am.SetGuard(st.DeviceID, isGuard, allChs)
+			} else {
+				am.SetGuard(req.ChannelID, isGuard)
+			}
+		}
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok":          true,
+		"channelId":   req.ChannelID,
+		"guardStatus": am.GetGuard(req.ChannelID),
+		"dutyStatus":  am.DutyStatus(req.ChannelID),
+	})
+}
+
+func (s *Server) handleDeviceAlarmAuto(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	dev, err := s.mgr.GetDevice(id)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	var req struct {
+		Enabled     bool     `json:"enabled"`
+		Interval    int      `json:"interval"`    // 秒
+		IntervalSec int      `json:"intervalSec"` // 秒
+		Channels    []string `json:"channels"`
+	}
+	if strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	am := dev.AlarmManager()
+	if am == nil {
+		writeErr(w, 500, "alarm manager not available")
+		return
+	}
+	if req.Enabled {
+		sec := req.IntervalSec
+		if sec <= 0 {
+			sec = req.Interval
+		}
+		if sec <= 0 {
+			sec = 15
+		}
+		interval := time.Duration(sec) * time.Second
+		if len(req.Channels) == 0 {
+			st := dev.Status()
+			for _, ch := range st.Channels {
+				req.Channels = append(req.Channels, ch.ID)
+			}
+		}
+		am.StartAutoAlarm(interval, req.Channels, func(ch string) {
+			_, _ = dev.SendAlarmEvent(ch, "5", "2", "3", "", 0, 0)
+		})
+	} else {
+		am.StopAutoAlarm()
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok":      true,
+		"running": am.IsAutoAlarmRunning(),
+	})
 }
 
 func (s *Server) handleDeviceStopSession(w http.ResponseWriter, r *http.Request, id string) {

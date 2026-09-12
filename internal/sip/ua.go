@@ -37,6 +37,9 @@ type UA struct {
 	cseq int32
 	callID string
 
+	ServerID   string
+	serverIDMu sync.RWMutex
+
 	// 注册状态
 	registered atomic.Bool
 
@@ -59,6 +62,27 @@ func NewUA(localIP string, localPort int, serverIP string, serverPort int, trans
 		waiters:    map[string]chan *Message{},
 		callID:     RandomToken(8) + "@" + localIP,
 	}
+}
+
+// SetServerID 动态设置或学习对端平台 SIP ID。
+func (ua *UA) SetServerID(id string) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return
+	}
+	ua.serverIDMu.Lock()
+	ua.ServerID = id
+	ua.serverIDMu.Unlock()
+}
+
+// GetServerID 获取对端平台 SIP ID。
+func (ua *UA) GetServerID() string {
+	ua.serverIDMu.RLock()
+	defer ua.serverIDMu.RUnlock()
+	if ua.ServerID != "" {
+		return ua.ServerID
+	}
+	return ua.Username
 }
 
 func (ua *UA) Start() error {
@@ -212,8 +236,19 @@ func (ua *UA) requestOnce(method, requestURI string, extra func(*Message), body 
 	via += ";branch=" + branch
 	req.SetHeader("Via", via)
 	req.SetHeader("From", fmt.Sprintf("<sip:%s@%s>;tag=%s", ua.Username, ua.ServerIP, RandomToken(6)))
-	req.SetHeader("To", fmt.Sprintf("<sip:%s@%s>", ua.Username, ua.ServerIP))
-	req.SetHeader("Call-ID", ua.callID)
+	toUser := uriUser(requestURI)
+	if toUser == "" {
+		toUser = ua.GetServerID()
+	}
+	req.SetHeader("To", fmt.Sprintf("<sip:%s@%s>", toUser, ua.ServerIP))
+
+	// Call-ID: 注册请求应保持同一个 Call-ID (RFC 3261 Section 10.2)；
+	// 对话外独立请求（如 MESSAGE、INFO、OPTIONS）必须生成独立随机 Call-ID，避免 Jain-SIP 事务丢弃与重放拦截！
+	if method == "REGISTER" {
+		req.SetHeader("Call-ID", ua.callID)
+	} else {
+		req.SetHeader("Call-ID", fmt.Sprintf("%s@%s", RandomToken(16), ua.LocalIP))
+	}
 	req.SetHeader("CSeq", fmt.Sprintf("%d %s", ua.nextCSeq(), method))
 	req.SetHeader("Max-Forwards", "70")
 	req.SetHeader("User-Agent", ua.UserAgent)
@@ -297,7 +332,15 @@ func (ua *UA) SendResponse(src net.Addr, msg *Message) error {
 
 // Reply 向 src 回复响应。
 func (ua *UA) Reply(req *Message, src net.Addr, code int, reason string, body []byte, contentType string) error {
+	return ua.ReplyExtra(req, src, code, reason, nil, body, contentType)
+}
+
+// ReplyExtra 构造应答并允许自定义修改头部字段
+func (ua *UA) ReplyExtra(req *Message, src net.Addr, code int, reason string, extra func(*Message), body []byte, contentType string) error {
 	resp := ua.buildResponse(req, code, reason)
+	if extra != nil {
+		extra(resp)
+	}
 	if body != nil {
 		resp.Body = body
 		if contentType != "" {
@@ -417,19 +460,28 @@ func (ua *UA) SendRaw(dst string, msg *Message) error {
 	return ua.send(dst, msg.Bytes())
 }
 
-// SendMessage 向平台发送 MESSAGE（如 Keepalive、报警通知）。
+// SendMessage 向平台发送 MESSAGE（如 Keepalive、报警通知、目录应答等），默认使用已学习或配置的 ServerID。
 func (ua *UA) SendMessage(body []byte, contentType string) (*Message, error) {
-	requestURI := fmt.Sprintf("sip:%s@%s:%d", ua.Username, ua.ServerIP, ua.ServerPort)
-	// Subject 头 GB28181 常用：deviceid,sn
+	return ua.SendMessageTo(ua.GetServerID(), body, contentType)
+}
+
+// SendMessageTo 向指定目标 ID 发送 MESSAGE。
+func (ua *UA) SendMessageTo(targetID string, body []byte, contentType string) (*Message, error) {
+	if targetID == "" {
+		targetID = ua.GetServerID()
+	}
+	requestURI := fmt.Sprintf("sip:%s@%s:%d", targetID, ua.ServerIP, ua.ServerPort)
 	return ua.Request("MESSAGE", requestURI, func(m *Message) {
-		// 保持
+		m.SetHeader("To", fmt.Sprintf("<sip:%s@%s>", targetID, ua.ServerIP))
 	}, body, contentType)
 }
 
 // SendMessageWithSubject 带 Subject 的 MESSAGE。
 func (ua *UA) SendMessageWithSubject(body []byte, contentType, subject string) (*Message, error) {
-	requestURI := fmt.Sprintf("sip:%s@%s:%d", ua.Username, ua.ServerIP, ua.ServerPort)
+	targetID := ua.GetServerID()
+	requestURI := fmt.Sprintf("sip:%s@%s:%d", targetID, ua.ServerIP, ua.ServerPort)
 	return ua.Request("MESSAGE", requestURI, func(m *Message) {
+		m.SetHeader("To", fmt.Sprintf("<sip:%s@%s>", targetID, ua.ServerIP))
 		if subject != "" {
 			m.SetHeader("Subject", subject)
 		}

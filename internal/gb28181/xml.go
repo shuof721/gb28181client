@@ -40,9 +40,92 @@ func unmarshalXML(body []byte, v any) error {
 	dec := xml.NewDecoder(bytes.NewReader(body))
 	dec.CharsetReader = charsetReader
 	if err := dec.Decode(v); err != nil {
+		// Fallback: 如果初始解码失败（比如平台发来的 GB2312 报文未带 xml 声明导致 Go 默认按 utf-8 报 invalid UTF-8），
+		// 则尝试先整体将 GB18030 转为 UTF-8 后再次解码
+		reader := transform.NewReader(bytes.NewReader(body), simplifiedchinese.GB18030.NewDecoder())
+		utf8Body, rerr := io.ReadAll(reader)
+		if rerr == nil {
+			dec2 := xml.NewDecoder(bytes.NewReader(utf8Body))
+			dec2.CharsetReader = charsetReader
+			if err2 := dec2.Decode(v); err2 == nil {
+				return nil
+			}
+		}
 		return err
 	}
 	return nil
+}
+
+// EncodeXML 将 UTF-8 字符串转换为目标字符集的字节切片。
+// 若 charset 为 GB2312/GBK/GB18030，则使用 GB18030 编码（兼容 GB2312 与 GBK 全部汉字与字符）；
+// 若 charset 为 UTF-8，则返回 UTF-8 字节。
+func EncodeXML(xmlStr string, charset string) ([]byte, error) {
+	cs := strings.ToUpper(strings.TrimSpace(charset))
+	if cs == "" || cs == "GB2312" || cs == "GBK" || cs == "GB18030" {
+		reader := transform.NewReader(strings.NewReader(xmlStr), simplifiedchinese.GB18030.NewEncoder())
+		return io.ReadAll(reader)
+	}
+	return []byte(xmlStr), nil
+}
+
+// BuildXML 统一构造符合 GB/T 28181 规范的 XML 报文（标准头部声明、字段顺序与字符编码）。
+// rootTag: "Response", "Notify", "Control", "Query"
+func BuildXML(rootTag string, fields map[string]any, charset string) ([]byte, error) {
+	cs := strings.ToUpper(strings.TrimSpace(charset))
+	if cs == "" {
+		cs = "GB2312"
+	}
+	encHeader := cs
+	if cs == "GBK" || cs == "GB18030" {
+		encHeader = "GB2312" // 国标规范通常要求声明 GB2312
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "<?xml version=\"1.0\" encoding=\"%s\"?>\r\n", encHeader)
+	fmt.Fprintf(&b, "<%s>\r\n", rootTag)
+
+	// GB28181 标准字段排序，保证各平台 XML 解析器顺序一致
+	order := []string{
+		"CmdType", "SN", "DeviceID", "Result",
+		"AlarmPriority", "AlarmMethod", "AlarmTime", "AlarmDescription",
+		"Longitude", "Latitude",
+		"SumNum", "DeviceName", "Manufacturer", "Model", "Firmware",
+		"Channel", "Online", "Status", "Encode", "Record", "DeviceTime",
+		"NotifyType",
+	}
+	written := map[string]bool{}
+	for _, k := range order {
+		if v, ok := fields[k]; ok {
+			fmt.Fprintf(&b, "  <%s>%v</%s>\r\n", k, v, k)
+			written[k] = true
+		}
+	}
+	for k, v := range fields {
+		if written[k] || k == "DeviceList" || k == "RecordList" || k == "Alarmstatus" || k == "Info" {
+			continue
+		}
+		fmt.Fprintf(&b, "  <%s>%v</%s>\r\n", k, v, k)
+	}
+	if info, ok := fields["Info"].(string); ok && strings.TrimSpace(info) != "" {
+		trimmed := strings.TrimSpace(info)
+		if strings.HasPrefix(trimmed, "<Info>") && strings.HasSuffix(trimmed, "</Info>") {
+			b.WriteString("  " + trimmed + "\r\n")
+		} else {
+			b.WriteString(fmt.Sprintf("  <Info>\r\n    %s\r\n  </Info>\r\n", trimmed))
+		}
+	}
+	if as, ok := fields["Alarmstatus"].(string); ok && as != "" {
+		b.WriteString(as)
+	}
+	if dl, ok := fields["DeviceList"].(string); ok && dl != "" {
+		b.WriteString(dl)
+	}
+	if rl, ok := fields["RecordList"].(string); ok && rl != "" {
+		b.WriteString(rl)
+	}
+	fmt.Fprintf(&b, "</%s>\r\n", rootTag)
+
+	return EncodeXML(b.String(), cs)
 }
 
 func ParseRoot(body []byte) (*Root, error) {
@@ -155,15 +238,22 @@ type DragZoomParam struct {
 }
 
 type DeviceControlReq struct {
-	XMLName     xml.Name       `xml:"Control"`
+	XMLName     xml.Name       // 宽松匹配任何根标签 (Control / Notify 等)
 	CmdType     string         `xml:"CmdType"`
 	SN          string         `xml:"SN"`
 	DeviceID    string         `xml:"DeviceID"`
 	PTZCmd      string         `xml:"PTZCmd,omitempty"`
 	DragZoomIn  *DragZoomParam `xml:"DragZoomIn,omitempty"`
 	DragZoomOut *DragZoomParam `xml:"DragZoomOut,omitempty"`
+	GuardCmd    string         `xml:"GuardCmd,omitempty"` // SetGuard (布防) | ResetGuard (撤防)
+	AlarmCmd    string         `xml:"AlarmCmd,omitempty"` // ResetAlarm (报警复位)
+	TeleBoot    string         `xml:"TeleBoot,omitempty"` // Boot (远程重启)
 	Info        struct {
 		ControlPriority string `xml:"ControlPriority,omitempty"`
+		AlarmMethod     string `xml:"AlarmMethod,omitempty"`
+		AlarmType       string `xml:"AlarmType,omitempty"`
+		GuardCmd        string `xml:"GuardCmd,omitempty"`
+		AlarmCmd        string `xml:"AlarmCmd,omitempty"`
 	} `xml:"Info,omitempty"`
 	// 雨刷/灯光等可扩展
 }
@@ -273,12 +363,25 @@ type PresetQueryResp struct {
 // ----- DeviceConfig 等可按需扩展 -----
 
 func MarshalXML(v any) ([]byte, error) {
+	return MarshalXMLWithCharset(v, "GB2312")
+}
+
+func MarshalXMLWithCharset(v any, charset string) ([]byte, error) {
+	cs := strings.ToUpper(strings.TrimSpace(charset))
+	if cs == "" {
+		cs = "GB2312"
+	}
 	out, err := xml.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return nil, err
 	}
-	header := []byte(xml.Header)
-	return append(header, out...), nil
+	encHeader := cs
+	if cs == "GBK" || cs == "GB18030" {
+		encHeader = "GB2312"
+	}
+	header := fmt.Sprintf("<?xml version=\"1.0\" encoding=\"%s\"?>\r\n", encHeader)
+	fullXML := header + string(out) + "\r\n"
+	return EncodeXML(fullXML, cs)
 }
 
 // DecodePTZ 解析 GB28181 PTZCmd（A5 0F 01 ... 十六进制字符串）。
