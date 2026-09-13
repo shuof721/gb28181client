@@ -58,6 +58,8 @@ type Status struct {
 	Channels     []ChannelStatus         `json:"channels"`
 	Sessions     []any                   `json:"sessions"`
 	TalkSessions []media.TalkSessionInfo `json:"talkSessions"`
+	GPS          GPSStatus               `json:"gps"`
+	Subscribers  int                     `json:"subscribers"`
 	UptimeSec    int64                   `json:"uptimeSec"`
 	StartedAt    time.Time               `json:"startedAt"`
 }

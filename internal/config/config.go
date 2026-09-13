@@ -9,12 +9,44 @@ import (
 )
 
 type Config struct {
-	SIP     SIPConfig     `yaml:"sip" json:"sip"`
-	Device  DeviceConfig  `yaml:"device" json:"device"`
-	Media   MediaConfig   `yaml:"media" json:"media"`
-	Record  RecordConfig  `yaml:"record" json:"record"`
-	Logging LoggingConfig `yaml:"logging" json:"logging"`
-	UI      UIConfig      `yaml:"ui" json:"ui"`
+	SIP            SIPConfig            `yaml:"sip" json:"sip"`
+	Device         DeviceConfig         `yaml:"device" json:"device"`
+	Media          MediaConfig          `yaml:"media" json:"media"`
+	Record         RecordConfig         `yaml:"record" json:"record"`
+	MobilePosition MobilePositionConfig `yaml:"mobile_position" json:"mobile_position"`
+	Logging        LoggingConfig        `yaml:"logging" json:"logging"`
+	UI             UIConfig             `yaml:"ui" json:"ui"`
+}
+
+// MobilePositionConfig 移动位置与 GPS 轨迹模拟配置。
+type MobilePositionConfig struct {
+	Enabled   bool    `yaml:"enabled" json:"enabled"`       // 是否开启移动位置上报
+	ChannelID string  `yaml:"channel_id" json:"channel_id"` // 绑定的通道ID（空则为主设备）
+	Interval  int     `yaml:"interval" json:"interval"`     // 上报间隔 (秒，默认 5)
+	Mode      string  `yaml:"mode" json:"mode"`             // subscribe (仅响应订阅) | active (主动周期上报) | both (两者兼顾)
+	Pattern   string  `yaml:"pattern" json:"pattern"`       // static (静态) | circle (圆周巡逻) | linear (线性往返) | sine (正弦波动)
+	Longitude float64 `yaml:"longitude" json:"longitude"`   // 初始经度 (度)
+	Latitude  float64 `yaml:"latitude" json:"latitude"`     // 初始纬度 (度)
+	Altitude  float64 `yaml:"altitude" json:"altitude"`     // 海拔高度 (米)
+	Speed     float64 `yaml:"speed" json:"speed"`           // 巡航速度 (km/h)
+	Direction float64 `yaml:"direction" json:"direction"`   // 初始航向角 (0-360)
+	Radius    float64 `yaml:"radius" json:"radius"`         // 运动半径或往返距离 (米)
+}
+
+// DefaultMobilePositionConfig 返回默认初始移动位置配置。
+func DefaultMobilePositionConfig() MobilePositionConfig {
+	return MobilePositionConfig{
+		Enabled:   false,
+		Interval:  5,
+		Mode:      "both",
+		Pattern:   "circle",
+		Longitude: 116.397428,
+		Latitude:  39.909230,
+		Altitude:  50.0,
+		Speed:     30.0,
+		Direction: 90.0,
+		Radius:    500.0,
+	}
 }
 
 // RecordConfig 虚拟录像库参数配置。
@@ -29,19 +61,21 @@ type RecordConfig struct {
 
 // DeviceProfile 单个模拟设备的持久化配置（JSON 存储）。
 type DeviceProfile struct {
-	Enabled bool         `yaml:"enabled" json:"enabled"`
-	SIP     SIPConfig    `yaml:"sip" json:"sip"`
-	Device  DeviceConfig `yaml:"device" json:"device"`
-	Media   MediaConfig  `yaml:"media" json:"media"`
-	Record  RecordConfig `yaml:"record" json:"record"`
+	Enabled        bool                 `yaml:"enabled" json:"enabled"`
+	SIP            SIPConfig            `yaml:"sip" json:"sip"`
+	Device         DeviceConfig         `yaml:"device" json:"device"`
+	Media          MediaConfig          `yaml:"media" json:"media"`
+	Record         RecordConfig         `yaml:"record" json:"record"`
+	MobilePosition MobilePositionConfig `yaml:"mobile_position" json:"mobile_position"`
 }
 
 func (p *DeviceProfile) ToConfig() *Config {
 	cfg := &Config{
-		SIP:    p.SIP,
-		Device: p.Device,
-		Media:  p.Media,
-		Record: p.Record,
+		SIP:            p.SIP,
+		Device:         p.Device,
+		Media:          p.Media,
+		Record:         p.Record,
+		MobilePosition: p.MobilePosition,
 	}
 	cfg.applyDefaults()
 	return cfg
@@ -53,6 +87,7 @@ func (p *DeviceProfile) ApplyDefaults() {
 	p.Device = cfg.Device
 	p.Media = cfg.Media
 	p.Record = cfg.Record
+	p.MobilePosition = cfg.MobilePosition
 }
 
 func (p *DeviceProfile) Validate() error {
@@ -115,8 +150,9 @@ type ChannelConfig struct {
 	RegisterWay  int    `yaml:"register_way" json:"register_way"`
 	Secrecy      int    `yaml:"secrecy" json:"secrecy"`
 	CivilCode    string     `yaml:"civil_code" json:"civil_code"`
-	PTZType      int        `yaml:"ptz_type,omitempty" json:"ptz_type,omitempty"` // 1: 球机, 2: 半球, 3: 固定枪机, 4: 遥控枪机
-	PTZ          *PTZConfig `yaml:"ptz,omitempty" json:"ptz,omitempty"`
+	PTZType        int                   `yaml:"ptz_type,omitempty" json:"ptz_type,omitempty"` // 1: 球机, 2: 半球, 3: 固定枪机, 4: 遥控枪机
+	PTZ            *PTZConfig            `yaml:"ptz,omitempty" json:"ptz,omitempty"`
+	MobilePosition *MobilePositionConfig `yaml:"mobile_position,omitempty" json:"mobile_position,omitempty"` // 通道独立位置与轨迹仿真配置
 }
 
 // PTZPreset 预置位配置。
@@ -303,7 +339,8 @@ func Default() *Config {
 			RecordType:   "time",
 			FileSizeMB:   100,
 		},
-		Logging: LoggingConfig{Level: "info"},
+		MobilePosition: DefaultMobilePositionConfig(),
+		Logging:        LoggingConfig{Level: "info"},
 		UI: UIConfig{
 			Enabled: true,
 			Listen:  "127.0.0.1:8080",
@@ -394,6 +431,25 @@ func (c *Config) applyDefaults() {
 	if c.Record.FileSizeMB <= 0 {
 		c.Record.FileSizeMB = 100
 	}
+	if c.MobilePosition.Interval <= 0 {
+		c.MobilePosition.Interval = 5
+	}
+	if c.MobilePosition.Mode == "" {
+		c.MobilePosition.Mode = "both"
+	}
+	if c.MobilePosition.Pattern == "" {
+		c.MobilePosition.Pattern = "circle"
+	}
+	if c.MobilePosition.Longitude == 0 && c.MobilePosition.Latitude == 0 {
+		c.MobilePosition.Longitude = 116.397428
+		c.MobilePosition.Latitude = 39.909230
+	}
+	if c.MobilePosition.Radius <= 0 {
+		c.MobilePosition.Radius = 500.0
+	}
+	if c.MobilePosition.Speed <= 0 {
+		c.MobilePosition.Speed = 30.0
+	}
 	for i := range c.Device.Channels {
 		ch := &c.Device.Channels[i]
 		if ch.Status == "" {
@@ -410,6 +466,30 @@ func (c *Config) applyDefaults() {
 		}
 		if ch.Model == "" {
 			ch.Model = "SIM-IPC"
+		}
+		if ch.MobilePosition != nil {
+			if ch.MobilePosition.ChannelID == "" {
+				ch.MobilePosition.ChannelID = ch.ID
+			}
+			if ch.MobilePosition.Interval <= 0 {
+				ch.MobilePosition.Interval = c.MobilePosition.Interval
+			}
+			if ch.MobilePosition.Mode == "" {
+				ch.MobilePosition.Mode = c.MobilePosition.Mode
+			}
+			if ch.MobilePosition.Pattern == "" {
+				ch.MobilePosition.Pattern = "follow"
+			}
+			if ch.MobilePosition.Longitude == 0 && ch.MobilePosition.Latitude == 0 {
+				ch.MobilePosition.Longitude = c.MobilePosition.Longitude
+				ch.MobilePosition.Latitude = c.MobilePosition.Latitude
+			}
+			if ch.MobilePosition.Radius <= 0 {
+				ch.MobilePosition.Radius = c.MobilePosition.Radius
+			}
+			if ch.MobilePosition.Speed <= 0 {
+				ch.MobilePosition.Speed = c.MobilePosition.Speed
+			}
 		}
 	}
 }

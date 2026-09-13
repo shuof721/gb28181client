@@ -663,3 +663,276 @@ func (m *Manager) SetMediaMode(deviceID, mode string) error {
 	return m.store.Save(md.Profile)
 }
 
+// SetChannelStatus 快捷切换指定设备的通道在线/离线状态
+func (m *Manager) SetChannelStatus(deviceID, channelID, status string) error {
+	return m.UpdateChannel(deviceID, UpdateChannelRequest{
+		ID:     channelID,
+		Status: status,
+	})
+}
+
+// SendCatalogNotify 手动模拟触发指定通道的国标增量通知
+func (m *Manager) SendCatalogNotify(deviceID, channelID, event string) error {
+	id := config.NormalizeGBID(deviceID)
+	dev, err := m.GetDevice(id)
+	if err != nil {
+		return err
+	}
+	return dev.SendManualCatalogNotify(channelID, event)
+}
+
+// UpdateGPSConfig 更新指定设备的 GPS 配置
+func (m *Manager) UpdateGPSConfig(deviceID string, cfg config.MobilePositionConfig, channelID ...string) error {
+	id := config.NormalizeGBID(deviceID)
+	m.mu.RLock()
+	md, ok := m.devs[id]
+	var dev *Device
+	running := false
+	if ok {
+		dev = md.Dev
+		running = md.Running && dev != nil
+	}
+	m.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("device not found: %s", id)
+	}
+
+	chID := ""
+	if len(channelID) > 0 {
+		chID = channelID[0]
+	}
+	if chID == "" {
+		chID = cfg.ChannelID
+	}
+
+	if running {
+		dev.UpdateGPSConfig(cfg, chID)
+		return nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if chID == "" || chID == "__master__" || chID == md.Profile.Device.ID {
+		cfg.ChannelID = ""
+		md.Profile.MobilePosition = cfg
+	} else {
+		cfg.ChannelID = chID
+		for i := range md.Profile.Device.Channels {
+			if md.Profile.Device.Channels[i].ID == chID {
+				c := cfg
+				md.Profile.Device.Channels[i].MobilePosition = &c
+				break
+			}
+		}
+	}
+	return m.store.Save(md.Profile)
+}
+
+// SyncAllChannelsGPS 一键同步所有通道 GPS 配置
+func (m *Manager) SyncAllChannelsGPS(deviceID string, baseCfg config.MobilePositionConfig, followMode bool) error {
+	id := config.NormalizeGBID(deviceID)
+	m.mu.RLock()
+	md, ok := m.devs[id]
+	var dev *Device
+	running := false
+	if ok {
+		dev = md.Dev
+		running = md.Running && dev != nil
+	}
+	m.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("device not found: %s", id)
+	}
+
+	if running {
+		dev.SyncAllChannelsGPS(baseCfg, followMode)
+		return nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	md.Profile.MobilePosition = baseCfg
+	for i := range md.Profile.Device.Channels {
+		ch := &md.Profile.Device.Channels[i]
+		chCfg := baseCfg
+		chCfg.ChannelID = ch.ID
+		if followMode {
+			chCfg.Pattern = "follow"
+		}
+		ch.MobilePosition = &chCfg
+	}
+	return m.store.Save(md.Profile)
+}
+
+// ReportGPSNow 立即触发单次位置上报
+func (m *Manager) ReportGPSNow(deviceID string, channelID ...string) (GPSStatus, error) {
+	id := config.NormalizeGBID(deviceID)
+	dev, err := m.GetDevice(id)
+	if err != nil {
+		return GPSStatus{}, err
+	}
+	return dev.ReportGPSNow(channelID...)
+}
+
+// GetGPSStatus 获取指定通道或主设备的 GPS 状态与配置
+func (m *Manager) GetGPSStatus(deviceID string, channelID ...string) (GPSStatus, config.MobilePositionConfig, error) {
+	id := config.NormalizeGBID(deviceID)
+	m.mu.RLock()
+	md, ok := m.devs[id]
+	m.mu.RUnlock()
+
+	if !ok {
+		return GPSStatus{}, config.MobilePositionConfig{}, fmt.Errorf("device not found: %s", id)
+	}
+
+	chID := ""
+	if len(channelID) > 0 {
+		chID = channelID[0]
+	}
+
+	if md.Running && md.Dev != nil && md.Dev.GPSManager() != nil {
+		gm := md.Dev.GPSManager()
+		return gm.Current(chID), gm.GetChannelConfig(chID), nil
+	}
+
+	if chID == "" || chID == "__master__" || chID == md.Profile.Device.ID {
+		cfg := md.Profile.MobilePosition
+		return GPSStatus{
+			Enabled:   cfg.Enabled,
+			ChannelID: cfg.ChannelID,
+			Longitude: cfg.Longitude,
+			Latitude:  cfg.Latitude,
+			Altitude:  cfg.Altitude,
+			Speed:     cfg.Speed,
+			Direction: cfg.Direction,
+			Pattern:   cfg.Pattern,
+			Interval:  cfg.Interval,
+			Mode:      cfg.Mode,
+		}, cfg, nil
+	}
+
+	// 查找该通道
+	for _, ch := range md.Profile.Device.Channels {
+		if ch.ID == chID {
+			if ch.MobilePosition != nil {
+				cfg := *ch.MobilePosition
+				return GPSStatus{
+					Enabled:   cfg.Enabled,
+					ChannelID: chID,
+					Longitude: cfg.Longitude,
+					Latitude:  cfg.Latitude,
+					Altitude:  cfg.Altitude,
+					Speed:     cfg.Speed,
+					Direction: cfg.Direction,
+					Pattern:   cfg.Pattern,
+					Interval:  cfg.Interval,
+					Mode:      cfg.Mode,
+				}, cfg, nil
+			}
+			cfg := md.Profile.MobilePosition
+			cfg.ChannelID = chID
+			cfg.Pattern = "follow"
+			return GPSStatus{
+				Enabled:   cfg.Enabled,
+				ChannelID: chID,
+				Longitude: cfg.Longitude,
+				Latitude:  cfg.Latitude,
+				Altitude:  cfg.Altitude,
+				Speed:     cfg.Speed,
+				Direction: cfg.Direction,
+				Pattern:   "follow",
+				Interval:  cfg.Interval,
+				Mode:      cfg.Mode,
+			}, cfg, nil
+		}
+	}
+
+	return GPSStatus{}, config.MobilePositionConfig{}, fmt.Errorf("channel not found: %s", chID)
+}
+
+// GetAllGPS 获取主设备及所有下挂通道的当前最新位置与配置
+func (m *Manager) GetAllGPS(deviceID string) (GPSStatus, config.MobilePositionConfig, map[string]GPSStatus, map[string]config.MobilePositionConfig, error) {
+	id := config.NormalizeGBID(deviceID)
+	m.mu.RLock()
+	md, ok := m.devs[id]
+	m.mu.RUnlock()
+
+	if !ok {
+		return GPSStatus{}, config.MobilePositionConfig{}, nil, nil, fmt.Errorf("device not found: %s", id)
+	}
+
+	if md.Running && md.Dev != nil && md.Dev.GPSManager() != nil {
+		gm := md.Dev.GPSManager()
+		masterSt := gm.Current()
+		masterCfg := gm.GetMasterConfig()
+		chStatuses := gm.GetAllChannelStatuses()
+		chConfigs := gm.GetAllChannelConfigs()
+		return masterSt, masterCfg, chStatuses, chConfigs, nil
+	}
+
+	masterCfg := md.Profile.MobilePosition
+	masterSt := GPSStatus{
+		Enabled:   masterCfg.Enabled,
+		Longitude: masterCfg.Longitude,
+		Latitude:  masterCfg.Latitude,
+		Altitude:  masterCfg.Altitude,
+		Speed:     masterCfg.Speed,
+		Direction: masterCfg.Direction,
+		Pattern:   masterCfg.Pattern,
+		Interval:  masterCfg.Interval,
+		Mode:      masterCfg.Mode,
+	}
+
+	chStatuses := make(map[string]GPSStatus)
+	chConfigs := make(map[string]config.MobilePositionConfig)
+	for _, ch := range md.Profile.Device.Channels {
+		if ch.MobilePosition != nil {
+			chConfigs[ch.ID] = *ch.MobilePosition
+			chStatuses[ch.ID] = GPSStatus{
+				Enabled:   ch.MobilePosition.Enabled,
+				ChannelID: ch.ID,
+				Longitude: ch.MobilePosition.Longitude,
+				Latitude:  ch.MobilePosition.Latitude,
+				Altitude:  ch.MobilePosition.Altitude,
+				Speed:     ch.MobilePosition.Speed,
+				Direction: ch.MobilePosition.Direction,
+				Pattern:   ch.MobilePosition.Pattern,
+				Interval:  ch.MobilePosition.Interval,
+				Mode:      ch.MobilePosition.Mode,
+			}
+		} else {
+			cfg := masterCfg
+			cfg.ChannelID = ch.ID
+			cfg.Pattern = "follow"
+			chConfigs[ch.ID] = cfg
+			chStatuses[ch.ID] = GPSStatus{
+				Enabled:   masterCfg.Enabled,
+				ChannelID: ch.ID,
+				Longitude: masterCfg.Longitude,
+				Latitude:  masterCfg.Latitude,
+				Altitude:  masterCfg.Altitude,
+				Speed:     masterCfg.Speed,
+				Direction: masterCfg.Direction,
+				Pattern:   "follow",
+				Interval:  masterCfg.Interval,
+				Mode:      masterCfg.Mode,
+			}
+		}
+	}
+
+	return masterSt, masterCfg, chStatuses, chConfigs, nil
+}
+
+// ListSubscriptions 获取指定设备的订阅者列表
+func (m *Manager) ListSubscriptions(deviceID string) ([]*Subscriber, error) {
+	id := config.NormalizeGBID(deviceID)
+	dev, err := m.GetDevice(id)
+	if err != nil {
+		return nil, err
+	}
+	return dev.SubscriptionManager().ListAll(), nil
+}
+
+

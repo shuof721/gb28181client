@@ -87,8 +87,9 @@ func BuildXML(rootTag string, fields map[string]any, charset string) ([]byte, er
 	// GB28181 标准字段排序，保证各平台 XML 解析器顺序一致
 	order := []string{
 		"CmdType", "SN", "DeviceID", "Result",
+		"Time",
 		"AlarmPriority", "AlarmMethod", "AlarmTime", "AlarmDescription",
-		"Longitude", "Latitude",
+		"Longitude", "Latitude", "Speed", "Direction", "Altitude",
 		"SumNum", "DeviceName", "Manufacturer", "Model", "Firmware",
 		"Channel", "Online", "Status", "Encode", "Record", "DeviceTime",
 		"NotifyType",
@@ -358,6 +359,112 @@ type PresetQueryResp struct {
 		Num   int          `xml:"Num,attr"`
 		Items []PresetItem `xml:"Item"`
 	} `xml:"PresetList"`
+}
+
+// ----- MobilePosition (移动设备位置数据通知与订阅) -----
+
+type MobilePositionQueryReq struct {
+	XMLName  xml.Name `xml:"Query"`
+	CmdType  string   `xml:"CmdType"`
+	SN       string   `xml:"SN"`
+	DeviceID string   `xml:"DeviceID"`
+	Interval int      `xml:"Interval,omitempty"`
+}
+
+type MobilePositionNotify struct {
+	XMLName   xml.Name `xml:"Notify"`
+	CmdType   string   `xml:"CmdType"`
+	SN        string   `xml:"SN"`
+	DeviceID  string   `xml:"DeviceID"`
+	Time      string   `xml:"Time"`
+	Longitude float64  `xml:"Longitude"`
+	Latitude  float64  `xml:"Latitude"`
+	Speed     float64  `xml:"Speed,omitempty"`
+	Direction float64  `xml:"Direction,omitempty"`
+	Altitude  float64  `xml:"Altitude,omitempty"`
+}
+
+// ----- CatalogNotify (目录订阅增量通知) -----
+
+type CatalogNotifyItem struct {
+	DeviceID     string `xml:"DeviceID"`
+	Event        string `xml:"Event"` // ON, OFF, VLOST, DEFECT, ADD, DEL, UPDATE
+	Name         string `xml:"Name,omitempty"`
+	Manufacturer string `xml:"Manufacturer,omitempty"`
+	Model        string `xml:"Model,omitempty"`
+	Owner        string `xml:"Owner,omitempty"`
+	CivilCode    string `xml:"CivilCode,omitempty"`
+	Address      string `xml:"Address,omitempty"`
+	Parental     int    `xml:"Parental,omitempty"`
+	ParentID     string `xml:"ParentID,omitempty"`
+	SafetyWay    int    `xml:"SafetyWay,omitempty"`
+	RegisterWay  int    `xml:"RegisterWay,omitempty"`
+	Secrecy      int    `xml:"Secrecy,omitempty"`
+	Status       string `xml:"Status,omitempty"`
+	PTZType      int    `xml:"PTZType,omitempty"`
+}
+
+type CatalogNotify struct {
+	XMLName    xml.Name `xml:"Notify"`
+	CmdType    string   `xml:"CmdType"`
+	SN         string   `xml:"SN"`
+	DeviceID   string   `xml:"DeviceID"`
+	SumNum     int      `xml:"SumNum"`
+	DeviceList struct {
+		Num   int                 `xml:"Num,attr"`
+		Items []CatalogNotifyItem `xml:"Item"`
+	} `xml:"DeviceList"`
+}
+
+// BuildCatalogNotifyXML 构造标准目录增量通知报文
+func BuildCatalogNotifyXML(sn, rootDeviceID string, items []CatalogNotifyItem, charset string) ([]byte, error) {
+	var listB strings.Builder
+	fmt.Fprintf(&listB, "  <DeviceList Num=\"%d\">\r\n", len(items))
+	for _, it := range items {
+		listB.WriteString("    <Item>\r\n")
+		fmt.Fprintf(&listB, "      <DeviceID>%s</DeviceID>\r\n", it.DeviceID)
+		fmt.Fprintf(&listB, "      <Event>%s</Event>\r\n", it.Event)
+		if it.Name != "" {
+			fmt.Fprintf(&listB, "      <Name>%s</Name>\r\n", it.Name)
+		}
+		if it.Manufacturer != "" {
+			fmt.Fprintf(&listB, "      <Manufacturer>%s</Manufacturer>\r\n", it.Manufacturer)
+		}
+		if it.Model != "" {
+			fmt.Fprintf(&listB, "      <Model>%s</Model>\r\n", it.Model)
+		}
+		if it.Owner != "" {
+			fmt.Fprintf(&listB, "      <Owner>%s</Owner>\r\n", it.Owner)
+		}
+		if it.CivilCode != "" {
+			fmt.Fprintf(&listB, "      <CivilCode>%s</CivilCode>\r\n", it.CivilCode)
+		}
+		if it.Address != "" {
+			fmt.Fprintf(&listB, "      <Address>%s</Address>\r\n", it.Address)
+		}
+		if it.ParentID != "" {
+			fmt.Fprintf(&listB, "      <ParentID>%s</ParentID>\r\n", it.ParentID)
+		}
+		if it.Status != "" {
+			fmt.Fprintf(&listB, "      <Status>%s</Status>\r\n", it.Status)
+		}
+		if it.RegisterWay > 0 {
+			fmt.Fprintf(&listB, "      <RegisterWay>%d</RegisterWay>\r\n", it.RegisterWay)
+		}
+		if it.PTZType > 0 {
+			fmt.Fprintf(&listB, "      <PTZType>%d</PTZType>\r\n", it.PTZType)
+		}
+		listB.WriteString("    </Item>\r\n")
+	}
+	listB.WriteString("  </DeviceList>\r\n")
+
+	return BuildXML("Notify", map[string]any{
+		"CmdType":    "Catalog",
+		"SN":         sn,
+		"DeviceID":   rootDeviceID,
+		"SumNum":     len(items),
+		"DeviceList": listB.String(),
+	}, charset)
 }
 
 // ----- DeviceConfig 等可按需扩展 -----

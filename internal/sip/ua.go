@@ -412,6 +412,33 @@ func (ua *UA) SendBYE(requestURI, from, to, callID string) error {
 	return ua.send(ua.serverAddr(), req.Bytes())
 }
 
+// SendNotify 向订阅方发送 NOTIFY 请求并等待响应 (RFC 3265 / RFC 6665)。
+func (ua *UA) SendNotify(requestURI, from, to, callID, event, subState string, body []byte, contentType string) (*Message, error) {
+	if requestURI == "" {
+		requestURI = fmt.Sprintf("sip:%s@%s:%d", ua.GetServerID(), ua.ServerIP, ua.ServerPort)
+	}
+	if from == "" {
+		from = fmt.Sprintf("<sip:%s@%s>;tag=%s", ua.Username, ua.ServerIP, RandomToken(6))
+	}
+	if to == "" {
+		to = fmt.Sprintf("<sip:%s@%s>", ua.GetServerID(), ua.ServerIP)
+	}
+	extra := func(req *Message) {
+		req.SetHeader("From", from)
+		req.SetHeader("To", to)
+		req.SetHeader("Call-ID", callID)
+		if event != "" {
+			req.SetHeader("Event", event)
+		}
+		if subState != "" {
+			req.SetHeader("Subscription-State", subState)
+		} else {
+			req.SetHeader("Subscription-State", "active")
+		}
+	}
+	return ua.Request("NOTIFY", requestURI, extra, body, contentType)
+}
+
 // ===== 注册流程 =====
 
 func (ua *UA) Register(expires int) error {

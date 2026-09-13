@@ -173,12 +173,37 @@ func (s *Server) handleDeviceDispatch(w http.ResponseWriter, r *http.Request) {
 				s.handleChannelRemove(w, r, id)
 			case "bind":
 				s.handleChannelBind(w, r, id)
+			case "status":
+				s.handleChannelStatus(w, r, id)
 			default:
 				writeErr(w, 404, "Not found")
 			}
 		} else {
 			writeErr(w, 404, "Not found")
 		}
+	case "catalog":
+		if len(parts) >= 3 && parts[2] == "notify" {
+			s.handleDeviceCatalogNotify(w, r, id)
+		} else {
+			writeErr(w, 404, "Not found")
+		}
+	case "gps":
+		if len(parts) >= 3 {
+			switch parts[2] {
+			case "config":
+				s.handleDeviceGPSConfig(w, r, id)
+			case "report":
+				s.handleDeviceGPSReport(w, r, id)
+			case "sync":
+				s.handleDeviceGPSSync(w, r, id)
+			default:
+				writeErr(w, 404, "Not found")
+			}
+		} else {
+			s.handleDeviceGPSStatus(w, r, id)
+		}
+	case "subscriptions":
+		s.handleDeviceSubscriptions(w, r, id)
 	case "media":
 		if len(parts) >= 3 && parts[2] == "mode" {
 			s.handleMediaMode(w, r, id)
@@ -1153,6 +1178,169 @@ func (s *Server) handleMediaMode(w http.ResponseWriter, r *http.Request, id stri
 		return
 	}
 	writeJSON(w, 200, map[string]string{"ok": body.Mode})
+}
+
+func (s *Server) handleChannelStatus(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	var req struct {
+		ChannelID string `json:"channelId"`
+		Status    string `json:"status"` // ON | OFF
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if err := s.mgr.SetChannelStatus(id, req.ChannelID, req.Status); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]string{"ok": "status_updated", "channelId": req.ChannelID, "status": req.Status})
+}
+
+func (s *Server) handleDeviceCatalogNotify(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	var req struct {
+		ChannelID string `json:"channelId"`
+		Event     string `json:"event"` // ON, OFF, VLOST, DEFECT, ADD, DEL, UPDATE
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if err := s.mgr.SendCatalogNotify(id, req.ChannelID, req.Event); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]string{"ok": "catalog_notify_sent", "channelId": req.ChannelID, "event": req.Event})
+}
+
+func (s *Server) handleDeviceGPSStatus(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		writeErr(w, 405, "GET only")
+		return
+	}
+	chID := r.URL.Query().Get("channelId")
+	if chID != "" {
+		st, cfg, err := s.mgr.GetGPSStatus(id, chID)
+		if err != nil {
+			writeErr(w, 404, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{
+			"gps":       st,
+			"config":    cfg,
+			"channelId": chID,
+		})
+		return
+	}
+
+	masterSt, masterCfg, chStatuses, chConfigs, err := s.mgr.GetAllGPS(id)
+	if err != nil {
+		writeErr(w, 404, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"gps":             masterSt,
+		"config":          masterCfg,
+		"channelStatuses": chStatuses,
+		"channelConfigs":  chConfigs,
+	})
+}
+
+func (s *Server) handleDeviceGPSConfig(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost && r.Method != http.MethodPut {
+		writeErr(w, 405, "POST or PUT only")
+		return
+	}
+	chID := r.URL.Query().Get("channelId")
+	var req config.MobilePositionConfig
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if chID == "" {
+		chID = req.ChannelID
+	}
+	if err := s.mgr.UpdateGPSConfig(id, req, chID); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	st, cfg, _ := s.mgr.GetGPSStatus(id, chID)
+	writeJSON(w, 200, map[string]any{
+		"ok":        true,
+		"gps":       st,
+		"config":    cfg,
+		"channelId": chID,
+	})
+}
+
+func (s *Server) handleDeviceGPSReport(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	chID := r.URL.Query().Get("channelId")
+	st, err := s.mgr.ReportGPSNow(id, chID)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok":        true,
+		"gps":       st,
+		"channelId": chID,
+	})
+}
+
+func (s *Server) handleDeviceGPSSync(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	var req struct {
+		Config     config.MobilePositionConfig `json:"config"`
+		FollowMode bool                        `json:"followMode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if err := s.mgr.SyncAllChannelsGPS(id, req.Config, req.FollowMode); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	masterSt, masterCfg, chStatuses, chConfigs, _ := s.mgr.GetAllGPS(id)
+	writeJSON(w, 200, map[string]any{
+		"ok":              true,
+		"gps":             masterSt,
+		"config":          masterCfg,
+		"channelStatuses": chStatuses,
+		"channelConfigs":  chConfigs,
+	})
+}
+
+func (s *Server) handleDeviceSubscriptions(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		writeErr(w, 405, "GET only")
+		return
+	}
+	subs, err := s.mgr.ListSubscriptions(id)
+	if err != nil {
+		writeErr(w, 404, err.Error())
+		return
+	}
+	if subs == nil {
+		subs = []*device.Subscriber{}
+	}
+	writeJSON(w, 200, map[string]any{
+		"subscribers": subs,
+	})
 }
 
 func (s *Server) handleVideos(w http.ResponseWriter, r *http.Request) {

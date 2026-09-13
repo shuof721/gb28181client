@@ -488,6 +488,8 @@ select{cursor:pointer}
         <button class="tab-btn active" onclick="switchWorkbenchTab('channels', this)">通道列表与视频源</button>
         <button class="tab-btn" id="tabBtnSessions" onclick="switchWorkbenchTab('sessions', this)">实时点播与对讲</button>
         <button class="tab-btn" id="tabBtnAlarms" onclick="switchWorkbenchTab('alarms', this)">🚨 报警与布防联动</button>
+        <button class="tab-btn" id="tabBtnGPS" onclick="switchWorkbenchTab('gps', this)">🛰️ 移动位置与轨迹模拟</button>
+        <button class="tab-btn" id="tabBtnSubs" onclick="switchWorkbenchTab('subs', this)">📡 目录订阅与增量通知</button>
         <button class="tab-btn" onclick="switchWorkbenchTab('logs', this)">设备运行日志</button>
         <button class="tab-btn" onclick="switchWorkbenchTab('records', this)">虚拟录像排程与查询</button>
       </div>
@@ -660,7 +662,168 @@ select{cursor:pointer}
         <!-- Records table rendered here -->
       </div>
     </div>
-  </div>
+
+    <!-- Tab 5: GPS / MobilePosition -->
+    <div class="panel-body" id="tabGPS" style="display:none">
+      <!-- 通道切换与全局控制栏 -->
+      <div style="background:var(--surface-2);border-radius:var(--radius);padding:12px 16px;border:1px solid var(--border);margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-weight:700;font-size:13px;color:var(--text-main);margin-right:6px">🎯 当前配置通道:</span>
+          <div id="gpsChannelTabs" style="display:flex;gap:6px;flex-wrap:wrap">
+            <!-- 动态填充通道切换药丸按钮 -->
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="btn btn-sm" onclick="syncAllChannelsGPS(true)" title="让所有通道跟随当前主车轨迹，模拟同一车辆上的多摄像头">🚗 一键全通道跟随主车</button>
+          <button class="btn btn-sm" onclick="syncAllChannelsGPS(false)" title="将当前通道参数完整克隆给所有通道">📋 一键克隆至所有通道</button>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:16px">
+        <!-- 实时位置与仪表卡片 -->
+        <div style="background:var(--surface-2);border-radius:var(--radius);padding:16px;border:1px solid var(--border);display:flex;flex-direction:column;gap:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-weight:700;font-size:13px;color:var(--text-main)" id="gpsGaugeTitle">🛰️ 实时移动位置仪表 (GB/T 28181 附录 A.2.5)</span>
+            <span id="gpsActiveBadge" class="badge"><span class="dot"></span>检测中...</span>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div style="background:var(--bg-dark);padding:10px;border-radius:var(--radius-sm);border:1px solid var(--border)">
+              <div style="font-size:11px;color:var(--text-dim)">当前经度 (Longitude)</div>
+              <div style="font-size:18px;font-weight:700;color:var(--cyan);font-family:var(--font-mono)" id="gpsValLon">116.397428</div>
+            </div>
+            <div style="background:var(--bg-dark);padding:10px;border-radius:var(--radius-sm);border:1px solid var(--border)">
+              <div style="font-size:11px;color:var(--text-dim)">当前纬度 (Latitude)</div>
+              <div style="font-size:18px;font-weight:700;color:var(--ok);font-family:var(--font-mono)" id="gpsValLat">39.909230</div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;text-align:center">
+            <div style="background:var(--bg-dark);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border)">
+              <div style="font-size:10px;color:var(--text-dim)">移动速度 (Speed)</div>
+              <div style="font-size:15px;font-weight:700;color:var(--warn);font-family:var(--font-mono)" id="gpsValSpeed">30.0 km/h</div>
+            </div>
+            <div style="background:var(--bg-dark);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border)">
+              <div style="font-size:10px;color:var(--text-dim)">航向角 (Direction)</div>
+              <div style="font-size:15px;font-weight:700;color:var(--purple);font-family:var(--font-mono)" id="gpsValDir">90.0°</div>
+            </div>
+            <div style="background:var(--bg-dark);padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border)">
+              <div style="font-size:10px;color:var(--text-dim)">海拔高度 (Altitude)</div>
+              <div style="font-size:15px;font-weight:700;color:#38bdf8;font-family:var(--font-mono)" id="gpsValAlt">50.0 m</div>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--text-dim)">
+            <span>更新时间: <span id="gpsValTime" style="color:var(--text-main);font-family:var(--font-mono)">-</span></span>
+            <button class="btn btn-sm btn-primary" onclick="triggerManualGPSReport()">🚀 立即为当前通道上报位置</button>
+          </div>
+        </div>
+
+        <!-- 轨迹参数配置表单 -->
+        <div style="background:var(--surface-2);border-radius:var(--radius);padding:16px;border:1px solid var(--border);display:flex;flex-direction:column;gap:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-weight:700;font-size:13px;color:var(--text-main)" id="gpsCfgFormTitle">⚙️ 运动轨迹参数与仿真规则</span>
+            <span id="gpsTargetBadge" class="badge" style="font-size:11px">主设备</span>
+          </div>
+          <div class="form-grid-2">
+            <div class="form-group">
+              <label class="form-label">位置上报开关</label>
+              <select id="gpsCfgEnabled">
+                <option value="true">开启该通道位置模拟</option>
+                <option value="false">关闭 (停用)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">上报触发模式</label>
+              <select id="gpsCfgMode">
+                <option value="both">两者兼顾 (订阅NOTIFY + 主动MESSAGE)</option>
+                <option value="subscribe">仅响应平台订阅 (SUBSCRIBE -&gt; NOTIFY)</option>
+                <option value="active">主动定时上报 (SIP MESSAGE)</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">轨迹生成模式 (Pattern)</label>
+            <select id="gpsCfgPattern" onchange="onGPSPatternChange()">
+              <option value="follow">🚗 跟随设备主GPS (车载同车模式，共享主车经纬度)</option>
+              <option value="circle">🔄 圆周巡逻 (以中心点圆周环形巡航)</option>
+              <option value="linear">↔️ 线性往返 (沿航向折返往返移动)</option>
+              <option value="sine">〰️ 正弦波动 (曲线蛇形摆动行进)</option>
+              <option value="static">📍 静态驻留 (固定经纬度定点)</option>
+            </select>
+          </div>
+          <div id="gpsParamFields">
+            <div class="form-grid-3">
+              <div class="form-group">
+                <label class="form-label">基准经度 (Longitude)</label>
+                <input type="number" step="0.000001" id="gpsCfgLon"/>
+              </div>
+              <div class="form-group">
+                <label class="form-label">基准纬度 (Latitude)</label>
+                <input type="number" step="0.000001" id="gpsCfgLat"/>
+              </div>
+              <div class="form-group">
+                <label class="form-label">基准海拔 (Altitude/m)</label>
+                <input type="number" id="gpsCfgAlt"/>
+              </div>
+            </div>
+            <div class="form-grid-3">
+              <div class="form-group">
+                <label class="form-label">巡航速度 (Speed km/h)</label>
+                <input type="number" id="gpsCfgSpeed"/>
+              </div>
+              <div class="form-group">
+                <label class="form-label">运动半径/范围 (m)</label>
+                <input type="number" id="gpsCfgRadius"/>
+              </div>
+              <div class="form-group">
+                <label class="form-label">上报周期 (Interval 秒)</label>
+                <input type="number" id="gpsCfgInterval"/>
+              </div>
+            </div>
+          </div>
+          <div id="gpsFollowHint" style="display:none;padding:10px;background:rgba(6,182,212,0.1);border:1px solid #06b6d4;border-radius:var(--radius-sm);font-size:12px;color:#67e8f9">
+            ℹ️ <b>车载同车跟随模式已开启</b>：该通道已绑定为主车随动摄像头，其实时经纬度、移动速度与航向角将全自动跟随主设备 GPS 同步演算，无需重复设定独立运动轨迹。
+          </div>
+          <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:4px">
+            <button class="btn btn-sm btn-success" onclick="saveGPSConfig()">💾 保存并生效当前通道配置</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 6: Catalog Subscriptions & Incremental Notify -->
+    <div class="panel-body" id="tabSubs" style="display:none">
+      <div style="margin-bottom:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div style="font-weight:700;font-size:13px;color:var(--text-main)">📡 当前活动 SIP 订阅会话 (RFC 3265 / RFC 6665)</div>
+          <button class="btn btn-sm" onclick="loadSubscriptions()">🔄 刷新订阅列表</button>
+        </div>
+        <div id="subscriptionTableContainer" style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm)">
+          <!-- Subscriptions table rendered here -->
+        </div>
+      </div>
+
+      <!-- 目录增量通知调试面板 -->
+      <div style="background:var(--surface-2);border-radius:var(--radius);padding:16px;border:1px solid var(--border)">
+        <div style="font-weight:700;font-size:13px;color:var(--text-main);margin-bottom:6px">📢 国标目录增量通知模拟调试工具 (GB/T 28181 附录 A.2.2)</div>
+        <div style="font-size:12px;color:var(--text-dim);margin-bottom:12px">
+          当设备产生通道状态变化、更名或上下线时，向所有活跃 Catalog 订阅者推送增量 NOTIFY 报文，平台端即可实时感知更新而无需每次耗时轮询拉取完整全量目录。
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <label style="font-size:12px;color:var(--text-muted)">目标通道:</label>
+          <select id="catNotifyChannelSelect" style="min-width:200px"></select>
+          <label style="font-size:12px;color:var(--text-muted)">事件类型 (&lt;Event&gt;):</label>
+          <select id="catNotifyEventSelect" style="width:160px">
+            <option value="ON">ON - 通道上线</option>
+            <option value="OFF">OFF - 通道离线</option>
+            <option value="UPDATE">UPDATE - 属性更新</option>
+            <option value="ADD">ADD - 增加通道</option>
+            <option value="DEL">DEL - 删除通道</option>
+            <option value="VLOST">VLOST - 视频丢失</option>
+            <option value="DEFECT">DEFECT - 硬件故障</option>
+          </select>
+          <button class="btn btn-sm btn-primary" onclick="submitCatalogNotify()">📢 广播发送目录增量通知</button>
+        </div>
+      </div>
+    </div>
 
 </div>
 
@@ -1328,9 +1491,13 @@ function switchWorkbenchTab(tab, btn){
   document.getElementById('tabChannels').style.display = (tab==='channels' ? 'block' : 'none');
   document.getElementById('tabSessions').style.display = (tab==='sessions' ? 'block' : 'none');
   document.getElementById('tabAlarms').style.display = (tab==='alarms' ? 'block' : 'none');
+  document.getElementById('tabGPS').style.display = (tab==='gps' ? 'block' : 'none');
+  document.getElementById('tabSubs').style.display = (tab==='subs' ? 'block' : 'none');
   document.getElementById('tabLogs').style.display = (tab==='logs' ? 'block' : 'none');
   document.getElementById('tabRecords').style.display = (tab==='records' ? 'block' : 'none');
   if(tab==='alarms') loadDeviceAlarms();
+  if(tab==='gps') loadGPSStatus(true);
+  if(tab==='subs') loadSubscriptions();
   if(tab==='logs') loadLogs();
   if(tab==='records') loadDeviceRecords();
 }
@@ -1463,8 +1630,15 @@ async function loadActiveDeviceDetail(){
     '<span class="badge on"><span class="dot"></span>🛡️ 已布防</span>' :
     (st.guardStatus === 'ResetGuard' ? '<span class="badge off"><span class="dot"></span>🔓 已撤防</span>' : '');
 
+  let gpsBadge = (st.gps && st.gps.enabled) ?
+    '<span class="badge" style="background:#0e7490;color:#fff"><span class="dot"></span>🛰️ 坐标: ' + st.gps.longitude.toFixed(4) + ',' + st.gps.latitude.toFixed(4) + '</span>' : '';
+  let subBadge = (st.subscribers && st.subscribers > 0) ?
+    '<span class="badge" style="background:#6d28d9;color:#fff"><span class="dot"></span>📡 订阅: ' + st.subscribers + '</span>' : '';
+
   document.getElementById('workbenchBadges').innerHTML = stBadge +
     guardBadge +
+    gpsBadge +
+    subBadge +
     '<span class="badge"><span class="dot"></span>本地端口: ' + esc(sipCfg.local_port) + '</span>' +
     '<span class="badge"><span class="dot"></span>平台: ' + esc(sipCfg.server_ip) + ':' + esc(sipCfg.server_port) + '</span>';
 
@@ -1494,6 +1668,22 @@ async function loadActiveDeviceDetail(){
       tabBtnAlarms.innerHTML = '🚨 报警与布防联动';
     }
   }
+  const tabBtnGPS = document.getElementById('tabBtnGPS');
+  if(tabBtnGPS){
+    if(st.gps && st.gps.enabled){
+      tabBtnGPS.innerHTML = '🛰️ 移动位置与轨迹 <span style="background:#06b6d4;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700">巡航中</span>';
+    } else {
+      tabBtnGPS.innerHTML = '🛰️ 移动位置与轨迹模拟';
+    }
+  }
+  const tabBtnSubs = document.getElementById('tabBtnSubs');
+  if(tabBtnSubs){
+    if(st.subscribers && st.subscribers > 0){
+      tabBtnSubs.innerHTML = '📡 目录与事件订阅 <span style="background:#8b5cf6;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700">' + st.subscribers + ' 个活跃</span>';
+    } else {
+      tabBtnSubs.innerHTML = '📡 目录订阅与增量通知';
+    }
+  }
   renderAlarmsTab(st);
   updateRecordChannelOptions(devCfg.channels || [], activeDeviceId);
   if(document.getElementById('tabRecords').style.display !== 'none'){
@@ -1501,6 +1691,12 @@ async function loadActiveDeviceDetail(){
   }
   if(document.getElementById('tabAlarms').style.display !== 'none'){
     loadDeviceAlarms();
+  }
+  if(document.getElementById('tabGPS').style.display !== 'none'){
+    loadGPSStatus(false);
+  }
+  if(document.getElementById('tabSubs').style.display !== 'none'){
+    loadSubscriptions();
   }
 }
 
@@ -1576,6 +1772,7 @@ function renderChannels(channels, mediaCfg, sessions){
           '<button class="btn btn-sm btn-primary" onclick="setChannelGuardState(\'' + esc(ch.id) + '\',\'SetGuard\')">🛡️ 布防</button>'
         ) +
         '<button class="btn btn-sm" onclick="toggleChannelStatus(\'' + esc(ch.id) + '\',\'' + (ch.status==='ON'?'OFF':'ON') + '\')">' + (ch.status==='ON'?'设为离线':'设为在线') + '</button>' +
+        '<button class="btn btn-sm" onclick="quickCatalogNotify(\'' + esc(ch.id) + '\')">📢 增量通知</button>' +
         '<button class="btn btn-sm btn-danger" onclick="removeChannel(\'' + esc(ch.id) + '\')">删除</button>' +
       '</div>' +
     '</div>';
@@ -2861,6 +3058,325 @@ async function triggerQuickAlarm(kind){
   } else if(j && j.error){
     showToast('【' + chLabel + '】报警上报失败: ' + j.error, 'error');
   }
+}
+
+// ==================== GPS & MobilePosition Control ====================
+let selectedGPSChannelId = null; // null or "" means first channel / master
+let gpsConfigLoadedKey = null;
+
+function onGPSPatternChange(){
+  const pat = document.getElementById('gpsCfgPattern').value;
+  const paramFields = document.getElementById('gpsParamFields');
+  const followHint = document.getElementById('gpsFollowHint');
+  if(pat === 'follow'){
+    if(paramFields) paramFields.style.display = 'none';
+    if(followHint) followHint.style.display = 'block';
+  } else {
+    if(paramFields) paramFields.style.display = 'block';
+    if(followHint) followHint.style.display = 'none';
+  }
+}
+
+function selectGPSChannel(channelId){
+  selectedGPSChannelId = channelId;
+  loadGPSStatus(true);
+}
+
+async function loadGPSStatus(loadConfigToo){
+  if(!activeDeviceId) return;
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/gps');
+  if(!j) return;
+
+  const masterSt = j.gps || {};
+  const masterCfg = j.config || {};
+  const chStatuses = j.channelStatuses || {};
+  const chConfigs = j.channelConfigs || {};
+
+  const devChs = (activeDeviceData && activeDeviceData.profile && activeDeviceData.profile.device && activeDeviceData.profile.device.channels) || [];
+
+  // Default selected channel to the first channel if not set
+  if(selectedGPSChannelId === null){
+    if(devChs.length > 0){
+      selectedGPSChannelId = devChs[0].id;
+    } else {
+      selectedGPSChannelId = '__master__';
+    }
+  }
+
+  // Render channel selection tabs / pills
+  const tabContainer = document.getElementById('gpsChannelTabs');
+  if(tabContainer){
+    let tabsHtml = '';
+    devChs.forEach(function(c, idx){
+      const isSel = (selectedGPSChannelId === c.id);
+      const cSt = chStatuses[c.id] || {};
+      const isRunning = cSt.enabled;
+      const dotColor = isRunning ? 'var(--ok)' : 'var(--text-dim)';
+      const btnClass = isSel ? 'btn btn-sm btn-primary' : 'btn btn-sm';
+      tabsHtml += '<button class="' + btnClass + '" style="display:flex;align-items:center;gap:6px" onclick="selectGPSChannel(\'' + esc(c.id) + '\')">' +
+        '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + dotColor + '"></span>' +
+        '通道 ' + (idx + 1) + ': ' + esc(c.name) +
+        '</button>';
+    });
+
+    // Master vehicle option
+    const isMasterSel = (selectedGPSChannelId === '__master__' || selectedGPSChannelId === activeDeviceId);
+    const mRunning = masterSt.enabled;
+    const mDotColor = mRunning ? 'var(--cyan)' : 'var(--text-dim)';
+    const mBtnClass = isMasterSel ? 'btn btn-sm btn-primary' : 'btn btn-sm';
+    tabsHtml += '<button class="' + mBtnClass + '" style="display:flex;align-items:center;gap:6px" onclick="selectGPSChannel(\'__master__\')">' +
+      '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + mDotColor + '"></span>' +
+      '★ 设备/车体主GPS' +
+      '</button>';
+
+    tabContainer.innerHTML = tabsHtml;
+  }
+
+  // Determine current active target's status and config
+  let curSt, curCfg, curTitle, curTargetLabel;
+  if(selectedGPSChannelId === '__master__' || selectedGPSChannelId === activeDeviceId){
+    curSt = masterSt;
+    curCfg = masterCfg;
+    curTitle = '🛰️ 【车体/设备主GPS】实时移动位置仪表';
+    curTargetLabel = '设备主GPS (' + activeDeviceId + ')';
+  } else {
+    curSt = chStatuses[selectedGPSChannelId] || masterSt;
+    curCfg = chConfigs[selectedGPSChannelId] || masterCfg;
+    let foundName = selectedGPSChannelId;
+    for(let i=0; i<devChs.length; i++){
+      if(devChs[i].id === selectedGPSChannelId){
+        foundName = devChs[i].name;
+        break;
+      }
+    }
+    curTitle = '🛰️ 【通道: ' + esc(foundName) + '】实时移动位置仪表';
+    curTargetLabel = '通道: ' + esc(foundName) + ' (' + selectedGPSChannelId + ')';
+  }
+
+  const gaugeTitle = document.getElementById('gpsGaugeTitle');
+  if(gaugeTitle) gaugeTitle.innerHTML = curTitle;
+
+  const targetBadge = document.getElementById('gpsTargetBadge');
+  if(targetBadge) targetBadge.textContent = curTargetLabel;
+
+  const badge = document.getElementById('gpsActiveBadge');
+  if(badge){
+    if(curSt.enabled){
+      badge.className = 'badge on';
+      let patName = curSt.pattern || curCfg.pattern || 'circle';
+      if(patName === 'follow') patName = '跟随主车';
+      badge.innerHTML = '<span class="dot"></span>正在仿真巡航 (' + esc(patName) + ')';
+    } else {
+      badge.className = 'badge stopped';
+      badge.innerHTML = '<span class="dot"></span>已停用上报';
+    }
+  }
+
+  const lonEl = document.getElementById('gpsValLon');
+  const latEl = document.getElementById('gpsValLat');
+  const spdEl = document.getElementById('gpsValSpeed');
+  const dirEl = document.getElementById('gpsValDir');
+  const altEl = document.getElementById('gpsValAlt');
+  const timeEl = document.getElementById('gpsValTime');
+
+  if(lonEl) lonEl.textContent = (curSt.longitude !== undefined ? curSt.longitude.toFixed(6) : '116.397428');
+  if(latEl) latEl.textContent = (curSt.latitude !== undefined ? curSt.latitude.toFixed(6) : '39.909230');
+  if(spdEl) spdEl.textContent = (curSt.speed !== undefined ? curSt.speed.toFixed(1) : '0.0') + ' km/h';
+  if(dirEl) dirEl.textContent = (curSt.direction !== undefined ? curSt.direction.toFixed(1) : '0.0') + '°';
+  if(altEl) altEl.textContent = (curSt.altitude !== undefined ? curSt.altitude.toFixed(1) : '0.0') + ' m';
+  if(timeEl) timeEl.textContent = curSt.time || '-';
+
+  // Fill the form if explicitly requested or channel switched
+  const curKey = activeDeviceId + '_' + selectedGPSChannelId;
+  if(loadConfigToo || gpsConfigLoadedKey !== curKey){
+    gpsConfigLoadedKey = curKey;
+
+    const enSel = document.getElementById('gpsCfgEnabled');
+    if(enSel) enSel.value = curCfg.enabled ? 'true' : 'false';
+    const modeSel = document.getElementById('gpsCfgMode');
+    if(modeSel) modeSel.value = curCfg.mode || 'both';
+    const patSel = document.getElementById('gpsCfgPattern');
+    if(patSel) patSel.value = curCfg.pattern || (selectedGPSChannelId==='__master__'?'circle':'follow');
+
+    const cfgLon = document.getElementById('gpsCfgLon');
+    if(cfgLon) cfgLon.value = curCfg.longitude !== undefined ? curCfg.longitude : 116.397428;
+    const cfgLat = document.getElementById('gpsCfgLat');
+    if(cfgLat) cfgLat.value = curCfg.latitude !== undefined ? curCfg.latitude : 39.909230;
+    const cfgAlt = document.getElementById('gpsCfgAlt');
+    if(cfgAlt) cfgAlt.value = curCfg.altitude !== undefined ? curCfg.altitude : 50;
+    const cfgSpeed = document.getElementById('gpsCfgSpeed');
+    if(cfgSpeed) cfgSpeed.value = curCfg.speed !== undefined ? curCfg.speed : 30;
+    const cfgRadius = document.getElementById('gpsCfgRadius');
+    if(cfgRadius) cfgRadius.value = curCfg.radius !== undefined ? curCfg.radius : 500;
+    const cfgInterval = document.getElementById('gpsCfgInterval');
+    if(cfgInterval) cfgInterval.value = curCfg.interval !== undefined ? curCfg.interval : 5;
+
+    onGPSPatternChange();
+  }
+}
+
+async function saveGPSConfig(){
+  if(!activeDeviceId) return;
+  const targetCh = (selectedGPSChannelId === '__master__') ? '' : selectedGPSChannelId;
+  const body = {
+    enabled: document.getElementById('gpsCfgEnabled').value === 'true',
+    mode: document.getElementById('gpsCfgMode').value,
+    pattern: document.getElementById('gpsCfgPattern').value,
+    channel_id: targetCh,
+    longitude: parseFloat(document.getElementById('gpsCfgLon').value) || 0,
+    latitude: parseFloat(document.getElementById('gpsCfgLat').value) || 0,
+    altitude: parseFloat(document.getElementById('gpsCfgAlt').value) || 0,
+    speed: parseFloat(document.getElementById('gpsCfgSpeed').value) || 0,
+    radius: parseFloat(document.getElementById('gpsCfgRadius').value) || 0,
+    interval: parseInt(document.getElementById('gpsCfgInterval').value, 10) || 5
+  };
+
+  const q = targetCh ? ('?channelId=' + encodeURIComponent(targetCh)) : '';
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/gps/config' + q, 'POST', body);
+  if(j && j.ok){
+    showToast('当前通道 GPS 轨迹参数已保存并生效', 'success');
+    loadGPSStatus(false);
+    refreshAll();
+  }
+}
+
+async function triggerManualGPSReport(){
+  if(!activeDeviceId) return;
+  const targetCh = (selectedGPSChannelId === '__master__') ? '' : selectedGPSChannelId;
+  const q = targetCh ? ('?channelId=' + encodeURIComponent(targetCh)) : '';
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/gps/report' + q, 'POST');
+  if(j && j.ok){
+    const st = j.gps || {};
+    showToast('已向平台发送当前通道位置上报 (经度:' + (st.longitude||0).toFixed(5) + ', 纬度:' + (st.latitude||0).toFixed(5) + ')', 'success');
+    loadGPSStatus(false);
+  }
+}
+
+async function syncAllChannelsGPS(followMode){
+  if(!activeDeviceId) return;
+  const promptMsg = followMode ?
+    '确定将所有下挂通道设为【跟随主车】模式吗？\n所有通道将共享设备主轨迹，模拟车载同一载具上的多摄像头。' :
+    '确定将当前配置完整【克隆】给所有下挂通道吗？\n所有通道将复制相同的经纬度与轨迹算法独立演进。';
+
+  if(!confirm(promptMsg)) return;
+
+  const targetCh = (selectedGPSChannelId === '__master__') ? '' : selectedGPSChannelId;
+  const body = {
+    enabled: document.getElementById('gpsCfgEnabled').value === 'true',
+    mode: document.getElementById('gpsCfgMode').value,
+    pattern: followMode ? 'follow' : document.getElementById('gpsCfgPattern').value,
+    channel_id: targetCh,
+    longitude: parseFloat(document.getElementById('gpsCfgLon').value) || 0,
+    latitude: parseFloat(document.getElementById('gpsCfgLat').value) || 0,
+    altitude: parseFloat(document.getElementById('gpsCfgAlt').value) || 0,
+    speed: parseFloat(document.getElementById('gpsCfgSpeed').value) || 0,
+    radius: parseFloat(document.getElementById('gpsCfgRadius').value) || 0,
+    interval: parseInt(document.getElementById('gpsCfgInterval').value, 10) || 5
+  };
+
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/gps/sync', 'POST', {
+    config: body,
+    followMode: followMode
+  });
+  if(j && j.ok){
+    showToast(followMode ? '已将所有通道设置为跟随主车轨迹模式' : '已将配置参数克隆到所有通道', 'success');
+    loadGPSStatus(true);
+    refreshAll();
+  }
+}
+
+// ==================== Subscriptions & Incremental Notify ====================
+async function loadSubscriptions(){
+  if(!activeDeviceId) return;
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/subscriptions');
+  if(!j) return;
+
+  const subs = j.subscribers || [];
+  const container = document.getElementById('subscriptionTableContainer');
+  if(!container) return;
+
+  // Also populate catalog notify channel options
+  const catChSel = document.getElementById('catNotifyChannelSelect');
+  if(catChSel && activeDeviceData && activeDeviceData.profile && activeDeviceData.profile.device){
+    const chs = activeDeviceData.profile.device.channels || [];
+    const prev = catChSel.value;
+    catChSel.innerHTML = '<option value="' + esc(activeDeviceId) + '">【主设备自身】' + esc(activeDeviceId) + '</option>' +
+      chs.map(function(c){
+        return '<option value="' + esc(c.id) + '">' + esc(c.name) + ' (' + esc(c.id) + ')</option>';
+      }).join('');
+    if(prev) catChSel.value = prev;
+  }
+
+  if(!subs.length){
+    container.innerHTML = '<div style="color:var(--text-dim);padding:24px;text-align:center">当前无活动订阅会话。<br/><span style="font-size:12px;color:var(--text-muted)">当上级平台（如 WVP 或国标联网平台）发起目录订阅 (Catalog) 或位置订阅 (presence/MobilePosition) 并建立成功后，将在此展示订阅对话、Contact URI 与剩余租期。</span></div>';
+    return;
+  }
+
+  let rows = subs.map(function(s, idx){
+    let evBadge = '<span class="badge" style="font-size:10px">' + esc(s.event) + '</span>';
+    if(s.event === 'Catalog') evBadge = '<span class="badge on" style="font-size:10px">📁 目录订阅 (Catalog)</span>';
+    else if(s.event === 'presence') evBadge = '<span class="badge warn" style="font-size:10px">🛰️ 状态订阅 (presence)</span>';
+    else if(s.event === 'MobilePosition') evBadge = '<span class="badge" style="background:#06b6d4;color:#fff;font-size:10px">📍 位置订阅 (MobilePosition)</span>';
+
+    const subTime = s.subscribedAt ? s.subscribedAt.replace('T', ' ').substring(0, 19) : '-';
+    let remSec = s.expiresSec || 0;
+    if(s.expiresAt){
+      const diff = Math.round((new Date(s.expiresAt).getTime() - Date.now()) / 1000);
+      remSec = diff > 0 ? diff : 0;
+    }
+
+    return '<tr>' +
+      '<td style="color:var(--text-dim)">' + (idx + 1) + '</td>' +
+      '<td>' + evBadge + '</td>' +
+      '<td style="font-family:var(--font-mono);color:#93c5fd">' + esc(s.platformId || '-') + '</td>' +
+      '<td style="font-family:var(--font-mono);font-size:11px;color:var(--text-dim)">' + esc(s.contactUri || '-') + '</td>' +
+      '<td style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(s.callId) + '">' + esc(s.callId) + '</td>' +
+      '<td style="font-size:11px;color:var(--text-dim)">' + esc(subTime) + '</td>' +
+      '<td><span class="badge ' + (remSec > 0 ? 'on' : 'off') + '" style="font-size:10px">' + remSec + ' 秒 / 租约 ' + (s.expiresSec||0) + 's</span></td>' +
+    '</tr>';
+  }).join('');
+
+  container.innerHTML = '<table class="rec-table">' +
+    '<thead>' +
+      '<tr>' +
+        '<th style="width:36px">#</th>' +
+        '<th>事件类型 (Event)</th>' +
+        '<th>平台编码 (PlatformID)</th>' +
+        '<th>目标 Contact URI</th>' +
+        '<th>对话 Call-ID</th>' +
+        '<th>订阅时间</th>' +
+        '<th>剩余有效时间 (Expires)</th>' +
+      '</tr>' +
+    '</thead>' +
+    '<tbody>' + rows + '</tbody>' +
+  '</table>';
+}
+
+async function submitCatalogNotify(){
+  if(!activeDeviceId) return;
+  const chSel = document.getElementById('catNotifyChannelSelect');
+  const evSel = document.getElementById('catNotifyEventSelect');
+  if(!chSel || !evSel) return;
+
+  const chId = chSel.value;
+  const ev = evSel.value;
+
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/catalog/notify', 'POST', {
+    channelId: chId,
+    event: ev
+  });
+  if(j && j.ok){
+    showToast('📢 已成功向活跃订阅者广播目录增量通知 (Event: ' + ev + ')', 'success');
+  }
+}
+
+function quickCatalogNotify(chId){
+  const tabBtn = document.getElementById('tabBtnSubs');
+  if(tabBtn) switchWorkbenchTab('subs', tabBtn);
+  setTimeout(function(){
+    const chSel = document.getElementById('catNotifyChannelSelect');
+    if(chSel) chSel.value = chId;
+  }, 100);
 }
 
 // Video Library Modal & Player

@@ -70,6 +70,19 @@
               "zoom": 1
             }
           ]
+        },
+        "mobile_position": {
+          "enabled": true,
+          "channel_id": "34020000001320000001",
+          "interval": 5,
+          "mode": "both",
+          "pattern": "follow",
+          "longitude": 116.397428,
+          "latitude": 39.90923,
+          "altitude": 50,
+          "speed": 40,
+          "direction": 0,
+          "radius": 300
         }
       },
       {
@@ -84,7 +97,20 @@
         "safety_way": 0,
         "register_way": 1,
         "secrecy": 0,
-        "civil_code": "340200"
+        "civil_code": "340200",
+        "mobile_position": {
+          "enabled": true,
+          "channel_id": "34020000001320000002",
+          "interval": 5,
+          "mode": "both",
+          "pattern": "follow",
+          "longitude": 116.397428,
+          "latitude": 39.90923,
+          "altitude": 50,
+          "speed": 40,
+          "direction": 0,
+          "radius": 300
+        }
       }
     ]
   },
@@ -118,5 +144,18 @@
     "retain_days": 7,
     "record_type": "time",
     "file_size_mb": 100
+  },
+  "mobile_position": {
+    "enabled": false,
+    "channel_id": "",
+    "interval": 5,
+    "mode": "both",
+    "pattern": "circle",
+    "longitude": 116.397428,
+    "latitude": 39.90923,
+    "altitude": 0,
+    "speed": 30,
+    "direction": 0,
+    "radius": 500
   }
 }

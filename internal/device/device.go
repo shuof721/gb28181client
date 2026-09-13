@@ -36,6 +36,8 @@ type Device struct {
 	ptzMap map[string]*ChannelPTZ
 
 	alarmMgr *AlarmManager
+	gpsMgr   *GPSManager
+	subMgr   *SubscriptionManager
 
 	OnConfigChanged func(cfg *config.Config)
 }
@@ -99,6 +101,8 @@ func New(cfg *config.Config) *Device {
 		_ = d.SendMediaStatusNotify(ch, "121")
 	}
 	d.tm = media.NewTalkManager(cfg.SIP.LocalIP)
+	d.subMgr = NewSubscriptionManager()
+	d.gpsMgr = NewGPSManager(cfg.MobilePosition, cfg.Device.Channels, d.sendMobilePosition)
 	return d
 }
 
@@ -126,6 +130,8 @@ func (d *Device) Start() error {
 	go d.registerLoop()
 	// 心跳
 	go d.keepaliveLoop()
+	// GPS 轨迹上报
+	d.gpsMgr.Start()
 
 	return nil
 }
@@ -135,6 +141,7 @@ func (d *Device) Stop() {
 		return
 	}
 	close(d.stopCh)
+	d.gpsMgr.Stop()
 	d.ms.StopAll()
 	d.tm.StopAll()
 
@@ -158,6 +165,14 @@ func (d *Device) Stop() {
 
 func (d *Device) AlarmManager() *AlarmManager {
 	return d.alarmMgr
+}
+
+func (d *Device) GPSManager() *GPSManager {
+	return d.gpsMgr
+}
+
+func (d *Device) SubscriptionManager() *SubscriptionManager {
+	return d.subMgr
 }
 
 func (d *Device) Status() Status {
@@ -217,6 +232,15 @@ func (d *Device) Status() Status {
 	if !d.startedAt.IsZero() {
 		up = int64(time.Since(d.startedAt).Seconds())
 	}
+	gpsSt := GPSStatus{}
+	if d.gpsMgr != nil {
+		gpsSt = d.gpsMgr.Current()
+	}
+	subCount := 0
+	if d.subMgr != nil {
+		subCount = len(d.subMgr.ListAll())
+	}
+
 	return Status{
 		Registered:   d.ua.IsRegistered(),
 		DeviceID:     deviceID,
@@ -233,6 +257,8 @@ func (d *Device) Status() Status {
 		Channels:     chs,
 		Sessions:     sessions,
 		TalkSessions: talkSessions,
+		GPS:          gpsSt,
+		Subscribers:  subCount,
 		UptimeSec:    up,
 		StartedAt:    d.startedAt,
 	}
@@ -404,20 +430,280 @@ func (d *Device) onNotify(m *sip.Message, src net.Addr) {
 
 func (d *Device) onSubscribe(m *sip.Message, src net.Addr) {
 	ev := m.GetHeader("Event")
-	log.Printf("[sip] recv SUBSCRIBE Event=%s from=%s Call-ID=%s", ev, src, m.CallID())
+	callID := m.CallID()
+	log.Printf("[sip] recv SUBSCRIBE Event=%s from=%s Call-ID=%s", ev, src, callID)
+
+	expiresStr := m.GetHeader("Expires")
+	expiresSec := 3600
+	if expiresStr != "" {
+		if s, err := strconv.Atoi(expiresStr); err == nil {
+			expiresSec = s
+		}
+	}
+
+	// 动态学习对端平台 SIP ID
+	fromUser := m.FromUser()
+	if fromUser != "" && len(fromUser) >= 10 {
+		d.ua.SetServerID(fromUser)
+	}
+
+	contactURI := ""
+	if contact := m.GetHeader("Contact"); contact != "" {
+		contactURI = strings.Trim(contact, "<>")
+		if idx := strings.Index(contactURI, ">"); idx != -1 {
+			contactURI = contactURI[:idx]
+		}
+	}
+
+	fromHdr := m.GetHeader("From")
+	toHdr := m.GetHeader("To")
+	localTag := ""
+	if strings.Contains(strings.ToLower(toHdr), "tag=") {
+		parts := strings.Split(toHdr, "tag=")
+		if len(parts) > 1 {
+			localTag = strings.Split(parts[1], ";")[0]
+		}
+	}
+	if localTag == "" {
+		localTag = sip.RandomToken(6)
+		toHdr = toHdr + ";tag=" + localTag
+	}
 
 	extraHeaders := func(resp *sip.Message) {
 		if ev != "" {
 			resp.SetHeader("Event", ev)
 		}
-		expires := m.GetHeader("Expires")
-		if expires == "" {
-			expires = "3600"
-		}
-		resp.SetHeader("Expires", expires)
+		resp.SetHeader("Expires", strconv.Itoa(expiresSec))
+		resp.SetHeader("To", toHdr)
+		resp.SetHeader("Contact", d.ua.ContactURI())
 	}
 
 	_ = d.ua.ReplyExtra(m, src, 200, "OK", extraHeaders, nil, "")
+
+	// 订阅解除 (Expires=0)
+	if expiresSec <= 0 {
+		d.subMgr.Remove(callID)
+		log.Printf("[sub] subscriber removed (Expires=0): callID=%s", callID)
+		return
+	}
+
+	// 建立/续订活跃订阅
+	sub := &Subscriber{
+		ID:           callID,
+		Event:        ev,
+		CallID:       callID,
+		FromHeader:   fromHdr,
+		ToHeader:     toHdr,
+		ContactURI:   contactURI,
+		PlatformID:   fromUser,
+		SubscribedAt: time.Now(),
+		ExpiresAt:    time.Now().Add(time.Duration(expiresSec) * time.Second),
+		ExpiresSec:   expiresSec,
+		Interval:     5,
+	}
+
+	if len(m.Body) > 0 {
+		var q gb28181.MobilePositionQueryReq
+		if err := unmarshalBody(m.Body, &q); err == nil && q.Interval > 0 {
+			sub.Interval = q.Interval
+		}
+	}
+
+	d.subMgr.AddOrUpdate(sub)
+	log.Printf("[sub] subscription active: Event=%s Platform=%s Expires=%ds Interval=%ds",
+		ev, fromUser, expiresSec, sub.Interval)
+
+	// RFC 3265 规范：订阅建立成功后，需立即向订阅方发送初始状态 NOTIFY
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		lowerEv := strings.ToLower(ev)
+		if lowerEv == "presence" || lowerEv == "mobileposition" {
+			for _, st := range d.gpsMgr.CurrentAll() {
+				_ = d.sendMobilePosition(st)
+			}
+		} else if lowerEv == "catalog" {
+			d.sendInitialCatalogNotify(sub)
+		}
+	}()
+}
+
+func (d *Device) sendMobilePosition(st GPSStatus) error {
+	targetChannelID := st.ChannelID
+	if targetChannelID == "" {
+		d.cfgRLock()
+		if len(d.cfg.Device.Channels) > 0 {
+			targetChannelID = d.cfg.Device.Channels[0].ID
+		} else {
+			targetChannelID = d.cfg.Device.ID
+		}
+		d.cfgRUnlock()
+	}
+	sn := d.nextSN()
+	charset := d.getCharset()
+
+	body, err := gb28181.BuildXML("Notify", map[string]any{
+		"CmdType":   "MobilePosition",
+		"SN":        sn,
+		"DeviceID":  targetChannelID,
+		"Time":      st.Time,
+		"Longitude": fmt.Sprintf("%.6f", st.Longitude),
+		"Latitude":  fmt.Sprintf("%.6f", st.Latitude),
+		"Speed":     fmt.Sprintf("%.1f", st.Speed),
+		"Direction": fmt.Sprintf("%.1f", st.Direction),
+		"Altitude":  fmt.Sprintf("%.1f", st.Altitude),
+	}, charset)
+	if err != nil {
+		log.Printf("[gps] build MobilePosition xml failed: %v", err)
+		return err
+	}
+
+	// 1. 向活跃的 presence / MobilePosition 订阅者发送 NOTIFY
+	subscribers := d.subMgr.ListByEvent("presence")
+	if len(subscribers) == 0 {
+		subscribers = d.subMgr.ListByEvent("MobilePosition")
+	}
+
+	for _, sub := range subscribers {
+		subState := fmt.Sprintf("active;expires=%d", sub.RemainingSec())
+		reqURI := sub.ContactURI
+		if reqURI == "" {
+			reqURI = fmt.Sprintf("sip:%s@%s:%d", sub.PlatformID, d.cfg.SIP.ServerIP, d.cfg.SIP.ServerPort)
+		}
+		fromHeader := sub.ToHeader
+		toHeader := sub.FromHeader
+		callID := sub.CallID
+		event := sub.Event
+
+		go func(rURI, from, to, cid, ev, state string) {
+			_, nerr := d.ua.SendNotify(rURI, from, to, cid, ev, state, body, "Application/MANSCDP+xml")
+			if nerr != nil {
+				log.Printf("[gps] send NOTIFY to %s failed: %v", rURI, nerr)
+			}
+		}(reqURI, fromHeader, toHeader, callID, event, subState)
+	}
+
+	// 2. 若处于 active 主动上报模式，或 both 模式下无有效订阅者，则以 SIP MESSAGE 发往平台
+	if st.Mode == "active" || (st.Mode == "both" && len(subscribers) == 0) {
+		targetID := d.ua.GetServerID()
+		go func() {
+			_, merr := d.ua.SendMessageTo(targetID, body, "Application/MANSCDP+xml")
+			if merr != nil {
+				log.Printf("[gps] send active MESSAGE to %s failed: %v", targetID, merr)
+			}
+		}()
+	}
+
+	log.Printf("[gps] position reported ch=%s lon=%.6f lat=%.6f speed=%.1f dir=%.1f (subs=%d mode=%s)",
+		targetChannelID, st.Longitude, st.Latitude, st.Speed, st.Direction, len(subscribers), st.Mode)
+	return nil
+}
+
+// NotifyCatalogChange 当通道发生变更 (ON/OFF/ADD/DEL/UPDATE) 时向所有活跃 Catalog 订阅者广播 NOTIFY
+func (d *Device) NotifyCatalogChange(event string, ch config.ChannelConfig) {
+	subscribers := d.subMgr.ListByEvent("Catalog")
+
+	ptzType := ch.PTZType
+	if ptzType == 0 {
+		ptzType = 1
+	}
+	item := gb28181.CatalogNotifyItem{
+		DeviceID:     ch.ID,
+		Event:        strings.ToUpper(event),
+		Name:         ch.Name,
+		Manufacturer: ch.Manufacturer,
+		Model:        ch.Model,
+		Owner:        "Owner",
+		CivilCode:    ch.CivilCode,
+		Address:      ch.Address,
+		Parental:     ch.Parental,
+		ParentID:     ch.ParentID,
+		SafetyWay:    ch.SafetyWay,
+		RegisterWay:  ch.RegisterWay,
+		Secrecy:      ch.Secrecy,
+		Status:       ch.Status,
+		PTZType:      ptzType,
+	}
+
+	sn := d.nextSN()
+	charset := d.getCharset()
+	body, err := gb28181.BuildCatalogNotifyXML(sn, d.cfg.Device.ID, []gb28181.CatalogNotifyItem{item}, charset)
+	if err != nil {
+		log.Printf("[catalog] build Catalog Notify xml failed: %v", err)
+		return
+	}
+
+	// 1. 发送给所有订阅者
+	for _, sub := range subscribers {
+		subState := fmt.Sprintf("active;expires=%d", sub.RemainingSec())
+		reqURI := sub.ContactURI
+		if reqURI == "" {
+			reqURI = fmt.Sprintf("sip:%s@%s:%d", sub.PlatformID, d.cfg.SIP.ServerIP, d.cfg.SIP.ServerPort)
+		}
+		fromHeader := sub.ToHeader
+		toHeader := sub.FromHeader
+		callID := sub.CallID
+
+		go func(rURI, from, to, cid, state string) {
+			_, nerr := d.ua.SendNotify(rURI, from, to, cid, "Catalog", state, body, "Application/MANSCDP+xml")
+			if nerr != nil {
+				log.Printf("[catalog] send NOTIFY to %s failed: %v", rURI, nerr)
+			}
+		}(reqURI, fromHeader, toHeader, callID, subState)
+	}
+
+	// 2. 若当前没有订阅者，以 MESSAGE 发送兜底
+	if len(subscribers) == 0 {
+		targetID := d.ua.GetServerID()
+		go func() {
+			_, merr := d.ua.SendMessageTo(targetID, body, "Application/MANSCDP+xml")
+			if merr != nil {
+				log.Printf("[catalog] send incremental MESSAGE to %s failed: %v", targetID, merr)
+			}
+		}()
+	}
+
+	log.Printf("[catalog] Catalog Notify sent: ch=%s event=%s subscribers=%d", ch.ID, item.Event, len(subscribers))
+}
+
+func (d *Device) sendInitialCatalogNotify(sub *Subscriber) {
+	d.cfgRLock()
+	channels := d.cfg.Device.Channels
+	devID := d.cfg.Device.ID
+	d.cfgRUnlock()
+
+	items := make([]gb28181.CatalogNotifyItem, 0, len(channels))
+	for _, ch := range channels {
+		ptzType := ch.PTZType
+		if ptzType == 0 {
+			ptzType = 1
+		}
+		items = append(items, gb28181.CatalogNotifyItem{
+			DeviceID:     ch.ID,
+			Event:        "ON",
+			Name:         ch.Name,
+			Manufacturer: ch.Manufacturer,
+			Model:        ch.Model,
+			Status:       ch.Status,
+			ParentID:     devID,
+			PTZType:      ptzType,
+		})
+	}
+
+	sn := d.nextSN()
+	charset := d.getCharset()
+	body, err := gb28181.BuildCatalogNotifyXML(sn, devID, items, charset)
+	if err != nil {
+		log.Printf("[catalog] build initial Catalog Notify xml failed: %v", err)
+		return
+	}
+
+	subState := fmt.Sprintf("active;expires=%d", sub.RemainingSec())
+	reqURI := sub.ContactURI
+	if reqURI == "" {
+		reqURI = fmt.Sprintf("sip:%s@%s:%d", sub.PlatformID, d.cfg.SIP.ServerIP, d.cfg.SIP.ServerPort)
+	}
+	_, _ = d.ua.SendNotify(reqURI, sub.ToHeader, sub.FromHeader, sub.CallID, "Catalog", subState, body, "Application/MANSCDP+xml")
+	log.Printf("[catalog] initial Catalog Notify sent to %s (channels=%d)", sub.PlatformID, len(items))
 }
 
 func (d *Device) onInfo(m *sip.Message, src net.Addr) {

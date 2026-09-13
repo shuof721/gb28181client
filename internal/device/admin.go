@@ -127,9 +127,11 @@ func (d *Device) AddChannel(req AddChannelRequest) error {
 		}
 	}
 
+	newCh := d.cfg.Device.Channels[len(d.cfg.Device.Channels)-1]
 	d.cfgUnlock()
 
 	log.Printf("[ui] channel added id=%s name=%s mp4=%q", id, name, req.MP4)
+	go d.NotifyCatalogChange("ADD", newCh)
 	if d.OnConfigChanged != nil {
 		d.OnConfigChanged(d.cfg)
 	}
@@ -206,8 +208,10 @@ func (d *Device) RemoveChannel(id string) error {
 	id = config.NormalizeGBID(id)
 	d.cfgLock()
 	found := false
+	var removedCh config.ChannelConfig
 	for i, ch := range d.cfg.Device.Channels {
 		if ch.ID == id {
+			removedCh = ch
 			d.cfg.Device.Channels = append(d.cfg.Device.Channels[:i], d.cfg.Device.Channels[i+1:]...)
 			if d.cfg.Media.Channels != nil {
 				delete(d.cfg.Media.Channels, id)
@@ -222,6 +226,7 @@ func (d *Device) RemoveChannel(id string) error {
 	}
 	log.Printf("[ui] channel removed %s", id)
 	go d.ms.StopByChannel(id)
+	go d.NotifyCatalogChange("DEL", removedCh)
 	if d.OnConfigChanged != nil {
 		d.OnConfigChanged(d.cfg)
 	}
@@ -282,8 +287,8 @@ func (d *Device) UpdateChannel(req UpdateChannelRequest) error {
 	id := config.NormalizeGBID(req.ID)
 	d.cfgLock()
 	found := false
-	name := ""
-	status := ""
+	var updatedCh config.ChannelConfig
+	var eventType = "UPDATE"
 	for i := range d.cfg.Device.Channels {
 		if d.cfg.Device.Channels[i].ID == id {
 			if strings.TrimSpace(req.Name) != "" {
@@ -291,14 +296,16 @@ func (d *Device) UpdateChannel(req UpdateChannelRequest) error {
 			}
 			st := strings.ToUpper(strings.TrimSpace(req.Status))
 			if st == "ON" || st == "OFF" {
+				if d.cfg.Device.Channels[i].Status != st {
+					eventType = st
+				}
 				d.cfg.Device.Channels[i].Status = st
 				if st == "OFF" {
 					go d.ms.StopByChannel(id)
 				}
 			}
 			found = true
-			name = d.cfg.Device.Channels[i].Name
-			status = d.cfg.Device.Channels[i].Status
+			updatedCh = d.cfg.Device.Channels[i]
 			break
 		}
 	}
@@ -306,12 +313,127 @@ func (d *Device) UpdateChannel(req UpdateChannelRequest) error {
 	if !found {
 		return fmt.Errorf("通道不存在: %s", id)
 	}
-	log.Printf("[ui] channel updated id=%s name=%s status=%s", id, name, status)
-	go d.SendCatalogNotify()
+	log.Printf("[ui] channel updated id=%s name=%s status=%s event=%s", id, updatedCh.Name, updatedCh.Status, eventType)
+	go d.NotifyCatalogChange(eventType, updatedCh)
 	if d.OnConfigChanged != nil {
 		d.OnConfigChanged(d.cfg)
 	}
 	return nil
+}
+
+// SetChannelStatus 快捷切换通道在线/离线状态 (ON/OFF) 并广播通知
+func (d *Device) SetChannelStatus(channelID, status string) error {
+	channelID = config.NormalizeGBID(channelID)
+	status = strings.ToUpper(strings.TrimSpace(status))
+	if status != "ON" && status != "OFF" {
+		return fmt.Errorf("status 必须是 ON 或 OFF")
+	}
+	return d.UpdateChannel(UpdateChannelRequest{
+		ID:     channelID,
+		Status: status,
+	})
+}
+
+// SendManualCatalogNotify 手动模拟触发指定通道的国标增量通知 (ON, OFF, VLOST, DEFECT, ADD, DEL, UPDATE)
+func (d *Device) SendManualCatalogNotify(channelID, event string) error {
+	channelID = config.NormalizeGBID(channelID)
+	event = strings.ToUpper(strings.TrimSpace(event))
+	d.cfgRLock()
+	var foundCh *config.ChannelConfig
+	for _, ch := range d.cfg.Device.Channels {
+		if ch.ID == channelID {
+			c := ch
+			foundCh = &c
+			break
+		}
+	}
+	rootID := d.cfg.Device.ID
+	d.cfgRUnlock()
+
+	if foundCh == nil {
+		foundCh = &config.ChannelConfig{
+			ID:       channelID,
+			Name:     "通道" + channelID,
+			Status:   "ON",
+			ParentID: rootID,
+		}
+	}
+	d.NotifyCatalogChange(event, *foundCh)
+	return nil
+}
+
+// UpdateGPSConfig 更新并应用移动位置模拟配置（可指定通道ID，空或__master__则更新主设备）
+func (d *Device) UpdateGPSConfig(cfg config.MobilePositionConfig, channelID ...string) {
+	chID := ""
+	if len(channelID) > 0 {
+		chID = channelID[0]
+	}
+	if chID == "" {
+		chID = cfg.ChannelID
+	}
+
+	d.cfgLock()
+	if chID == "" || chID == "__master__" || chID == d.cfg.Device.ID {
+		cfg.ChannelID = ""
+		d.cfg.MobilePosition = cfg
+	} else {
+		cfg.ChannelID = chID
+		for i := range d.cfg.Device.Channels {
+			if d.cfg.Device.Channels[i].ID == chID {
+				c := cfg
+				d.cfg.Device.Channels[i].MobilePosition = &c
+				break
+			}
+		}
+	}
+	d.cfgUnlock()
+
+	if d.gpsMgr != nil {
+		if chID == "" || chID == "__master__" || chID == d.cfg.Device.ID {
+			d.gpsMgr.UpdateMasterConfig(cfg)
+		} else {
+			d.gpsMgr.UpdateChannelConfig(chID, cfg)
+		}
+	}
+	log.Printf("[ui] GPS config updated for target '%s': enabled=%v pattern=%s speed=%.1f interval=%d",
+		chID, cfg.Enabled, cfg.Pattern, cfg.Speed, cfg.Interval)
+
+	if d.OnConfigChanged != nil {
+		d.OnConfigChanged(d.cfg)
+	}
+}
+
+// SyncAllChannelsGPS 一键将主配置同步给所有通道（followMode 为 true 表示设置为跟随主车，false 表示克隆独立轨迹）
+func (d *Device) SyncAllChannelsGPS(baseCfg config.MobilePositionConfig, followMode bool) {
+	d.cfgLock()
+	d.cfg.MobilePosition = baseCfg
+	for i := range d.cfg.Device.Channels {
+		ch := &d.cfg.Device.Channels[i]
+		chCfg := baseCfg
+		chCfg.ChannelID = ch.ID
+		if followMode {
+			chCfg.Pattern = "follow"
+		}
+		ch.MobilePosition = &chCfg
+	}
+	d.cfgUnlock()
+
+	if d.gpsMgr != nil {
+		d.gpsMgr.SyncAllChannels(baseCfg, followMode)
+	}
+
+	log.Printf("[ui] Synced all channels GPS: followMode=%v", followMode)
+	if d.OnConfigChanged != nil {
+		d.OnConfigChanged(d.cfg)
+	}
+}
+
+// ReportGPSNow 手动立即触发单次位置上报（可指定通道ID）
+func (d *Device) ReportGPSNow(channelID ...string) (GPSStatus, error) {
+	if d.gpsMgr == nil {
+		return GPSStatus{}, fmt.Errorf("gps manager not initialized")
+	}
+	return d.gpsMgr.ReportNow(channelID...)
 }
 
 func normalizeVideoPath(p string) string {
