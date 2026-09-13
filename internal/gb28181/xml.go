@@ -238,25 +238,87 @@ type DragZoomParam struct {
 	LengthY   int `xml:"LengthY"`
 }
 
+type HomePositionParam struct {
+	Enabled           string `xml:"Enabled,omitempty"`           // 1 / 0
+	HomePositionReset string `xml:"HomePositionReset,omitempty"` // 1 / 0 (GB28181 标准别名)
+	ResetTime         int    `xml:"ResetTime,omitempty"`         // 归位时间(秒)
+	PresetIndex       int    `xml:"PresetIndex,omitempty"`       // 预置位编号 0~255
+}
+
 type DeviceControlReq struct {
-	XMLName     xml.Name       // 宽松匹配任何根标签 (Control / Notify 等)
-	CmdType     string         `xml:"CmdType"`
-	SN          string         `xml:"SN"`
-	DeviceID    string         `xml:"DeviceID"`
-	PTZCmd      string         `xml:"PTZCmd,omitempty"`
-	DragZoomIn  *DragZoomParam `xml:"DragZoomIn,omitempty"`
-	DragZoomOut *DragZoomParam `xml:"DragZoomOut,omitempty"`
-	GuardCmd    string         `xml:"GuardCmd,omitempty"` // SetGuard (布防) | ResetGuard (撤防)
-	AlarmCmd    string         `xml:"AlarmCmd,omitempty"` // ResetAlarm (报警复位)
-	TeleBoot    string         `xml:"TeleBoot,omitempty"` // Boot (远程重启)
-	Info        struct {
+	XMLName      xml.Name           // 宽松匹配任何根标签 (Control / Notify 等)
+	CmdType      string             `xml:"CmdType"`
+	SN           string             `xml:"SN"`
+	DeviceID     string             `xml:"DeviceID"`
+	PTZCmd       string             `xml:"PTZCmd,omitempty"`
+	DragZoomIn   *DragZoomParam     `xml:"DragZoomIn,omitempty"`
+	DragZoomOut  *DragZoomParam     `xml:"DragZoomOut,omitempty"`
+	GuardCmd     string             `xml:"GuardCmd,omitempty"`     // SetGuard (布防) | ResetGuard (撤防)
+	AlarmCmd     string             `xml:"AlarmCmd,omitempty"`     // ResetAlarm (报警复位)
+	TeleBoot     string             `xml:"TeleBoot,omitempty"`     // Boot (远程重启)
+	RecordCmd    string             `xml:"RecordCmd,omitempty"`    // Record / StopRecord
+	IFrameCmd    string             `xml:"IFrameCmd,omitempty"`    // Send / 1 (强制关键帧)
+	IFameCmd     string             `xml:"IFameCmd,omitempty"`     // WVP 历史拼写兼容
+	IFCDCmd      string             `xml:"IFCDCmd,omitempty"`      // 国标别名
+	HomePosition *HomePositionParam `xml:"HomePosition,omitempty"` // 看守位
+	Info         struct {
 		ControlPriority string `xml:"ControlPriority,omitempty"`
 		AlarmMethod     string `xml:"AlarmMethod,omitempty"`
 		AlarmType       string `xml:"AlarmType,omitempty"`
 		GuardCmd        string `xml:"GuardCmd,omitempty"`
 		AlarmCmd        string `xml:"AlarmCmd,omitempty"`
+		IFrameCmd       string `xml:"IFrameCmd,omitempty"`
+		RecordCmd       string `xml:"RecordCmd,omitempty"`
 	} `xml:"Info,omitempty"`
 	// 雨刷/灯光等可扩展
+}
+
+// IsForceIFrame 判断是否为强制关键帧指令 (兼顾各厂商和平台不同命名)
+func (r *DeviceControlReq) IsForceIFrame() bool {
+	return r.IFrameCmd != "" || r.IFameCmd != "" || r.IFCDCmd != "" || r.Info.IFrameCmd != ""
+}
+
+// ----- ConfigDownload (配置查询) -----
+
+type ConfigDownloadReq struct {
+	XMLName    xml.Name `xml:"Query"`
+	CmdType    string   `xml:"CmdType"`
+	SN         string   `xml:"SN"`
+	DeviceID   string   `xml:"DeviceID"`
+	ConfigType string   `xml:"ConfigType"` // BasicParam, VideoParamOpt, AudioParamOpt, SVACEncodeConfig 等
+}
+
+type BasicParamConfig struct {
+	Name               string  `xml:"Name,omitempty"`
+	Expiration         string  `xml:"Expiration,omitempty"`
+	HeartBeatInterval  int     `xml:"HeartBeatInterval,omitempty"`
+	HeartBeatCount     int     `xml:"HeartBeatCount,omitempty"`
+	PositionCapability int     `xml:"PositionCapability,omitempty"` // 0:不支持, 1:GPS, 2:北斗
+	Longitude          float64 `xml:"Longitude,omitempty"`
+	Latitude           float64 `xml:"Latitude,omitempty"`
+}
+
+type VideoParamOptConfig struct {
+	DownloadSpeed string `xml:"DownloadSpeed,omitempty"` // 各可选参数以 '/' 分隔，如 "1/2/4"
+	Resolution    string `xml:"Resolution,omitempty"`    // 如 "1920*1080/1280*720/704*576"
+}
+
+type AudioParamOptConfig struct {
+	AudioFormat  string `xml:"AudioFormat,omitempty"`  // 如 "G.711A/G.711U/AAC"
+	SamplingRate string `xml:"SamplingRate,omitempty"` // 如 "8/16/32"
+}
+
+// ----- DeviceConfig (配置下发与校时) -----
+
+type DeviceConfigReq struct {
+	XMLName       xml.Name             // 宽松匹配 Control / Query 等
+	CmdType       string               `xml:"CmdType"`
+	SN            string               `xml:"SN"`
+	DeviceID      string               `xml:"DeviceID"`
+	BasicParam    *BasicParamConfig    `xml:"BasicParam,omitempty"`
+	VideoParamOpt *VideoParamOptConfig `xml:"VideoParamOpt,omitempty"`
+	Time          string               `xml:"Time,omitempty"` // 2026-09-13T11:40:00 或 11:40:00
+	Date          string               `xml:"Date,omitempty"` // 2026-09-13
 }
 
 // ----- Keepalive -----

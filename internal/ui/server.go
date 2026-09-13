@@ -229,6 +229,27 @@ func (s *Server) handleDeviceDispatch(w http.ResponseWriter, r *http.Request) {
 		} else {
 			s.handleDevicePTZStatus(w, r, id)
 		}
+	case "control":
+		if len(parts) >= 3 {
+			switch parts[2] {
+			case "events":
+				s.handleDeviceControlEvents(w, r, id)
+			case "iframe":
+				s.handleDeviceControlIFrame(w, r, id)
+			case "reboot":
+				s.handleDeviceControlReboot(w, r, id)
+			case "record":
+				s.handleDeviceControlRecord(w, r, id)
+			case "time":
+				s.handleDeviceControlTime(w, r, id)
+			case "home-position":
+				s.handleDeviceControlHomePosition(w, r, id)
+			default:
+				writeErr(w, 404, "Not found")
+			}
+		} else {
+			writeErr(w, 404, "Not found")
+		}
 	default:
 		writeErr(w, 404, "Unknown device action")
 	}
@@ -1435,6 +1456,142 @@ func (s *Server) handleDeleteVideo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"ok": "deleted", "name": name})
+}
+
+func (s *Server) handleDeviceControlEvents(w http.ResponseWriter, r *http.Request, id string) {
+	events, err := s.mgr.GetControlEvents(id)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok":     true,
+		"events": events,
+	})
+}
+
+func (s *Server) handleDeviceControlIFrame(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	channelID := r.URL.Query().Get("channelId")
+	if channelID == "" {
+		var body struct {
+			ChannelID string `json:"channelId"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		channelID = body.ChannelID
+	}
+	applied, err := s.mgr.ForceIFrame(id, channelID)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok":        true,
+		"channelId": channelID,
+		"applied":   applied,
+	})
+}
+
+func (s *Server) handleDeviceControlReboot(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	if err := s.mgr.TriggerReboot(id); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok":      true,
+		"message": "远程重启流程已启动",
+	})
+}
+
+func (s *Server) handleDeviceControlRecord(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	var body struct {
+		Recording bool `json:"recording"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, 400, "bad json: "+err.Error())
+		return
+	}
+	if err := s.mgr.SetRecording(id, body.Recording); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok":        true,
+		"recording": body.Recording,
+	})
+}
+
+func (s *Server) handleDeviceControlTime(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	var body struct {
+		Time  string `json:"time"`
+		Reset bool   `json:"reset"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, 400, "bad json: "+err.Error())
+		return
+	}
+	if body.Reset {
+		if err := s.mgr.ResetTime(id); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{
+			"ok":         true,
+			"reset":      true,
+			"deviceTime": time.Now().Format("2006-01-02 15:04:05"),
+		})
+		return
+	}
+	t, err := s.mgr.SetTime(id, body.Time)
+	if err != nil {
+		writeErr(w, 400, "时间格式错误(支持 YYYY-MM-DD HH:mm:ss 或 HH:mm:ss): "+err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok":         true,
+		"deviceTime": t.Format("2006-01-02 15:04:05"),
+	})
+}
+
+func (s *Server) handleDeviceControlHomePosition(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	var body struct {
+		ChannelID   string `json:"channelId"`
+		Enabled     bool   `json:"enabled"`
+		PresetIndex int    `json:"presetIndex"`
+		ResetSec    int    `json:"resetSec"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, 400, "bad json: "+err.Error())
+		return
+	}
+	st, err := s.mgr.SetHomePosition(id, body.ChannelID, body.Enabled, body.PresetIndex, body.ResetSec)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok":  true,
+		"ptz": st,
+	})
 }
 
 func (s *Server) handleLegacyStatus(w http.ResponseWriter, r *http.Request) {

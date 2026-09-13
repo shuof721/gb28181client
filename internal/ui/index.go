@@ -490,6 +490,7 @@ select{cursor:pointer}
         <button class="tab-btn" id="tabBtnAlarms" onclick="switchWorkbenchTab('alarms', this)">🚨 报警与布防联动</button>
         <button class="tab-btn" id="tabBtnGPS" onclick="switchWorkbenchTab('gps', this)">🛰️ 移动位置与轨迹模拟</button>
         <button class="tab-btn" id="tabBtnSubs" onclick="switchWorkbenchTab('subs', this)">📡 目录订阅与增量通知</button>
+        <button class="tab-btn" id="tabBtnConfigCtrl" onclick="switchWorkbenchTab('configctrl', this)">⚙️ 远程配置与控制</button>
         <button class="tab-btn" onclick="switchWorkbenchTab('logs', this)">设备运行日志</button>
         <button class="tab-btn" onclick="switchWorkbenchTab('records', this)">虚拟录像排程与查询</button>
       </div>
@@ -825,7 +826,120 @@ select{cursor:pointer}
       </div>
     </div>
 
-</div>
+    <!-- Tab 7: Remote Device Configuration & Control -->
+    <div class="panel-body" id="tabConfigCtrl" style="display:none">
+      <!-- Row 1: Top Status & Capabilities Cards (2 columns) -->
+      <div style="display:grid;grid-template-columns:1.2fr 1fr;gap:16px;margin-bottom:16px">
+        <!-- Card 1: 虚拟时钟与设备控制操作台 -->
+        <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px">
+          <div style="font-weight:700;font-size:13px;color:var(--text-main);margin-bottom:10px;display:flex;align-items:center;justify-content:space-between">
+            <span>⏱️ 设备虚拟时钟与运行状态</span>
+            <div style="display:flex;gap:6px">
+              <span id="cfgCtrlRecordBadge" class="badge">录像状态</span>
+              <span id="cfgCtrlRebootBadge" class="badge">运行正常</span>
+            </div>
+          </div>
+          <div style="font-size:11px;color:var(--text-dim);line-height:1.5;margin-bottom:12px">
+            支持响应平台校时指令 (<code>DeviceConfig &gt; Time / Date</code>)，自动维护虚拟时钟偏移量；支持响应远程重启 (<code>TeleBoot</code>)、强制关键帧 (<code>IFrameCmd</code>) 及手动录像控制。
+          </div>
+          
+          <div style="background:var(--surface-3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px;margin-bottom:12px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+              <span style="font-size:12px;color:var(--text-muted)">当前设备虚拟时钟:</span>
+              <span id="cfgCtrlDeviceTime" style="font-family:var(--font-mono);font-size:14px;font-weight:700;color:var(--primary)">-</span>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px">
+              <span style="color:var(--text-dim)">时钟偏移量 (Offset):</span>
+              <span id="cfgCtrlTimeOffset" style="font-family:var(--font-mono);color:var(--text-muted)">0s (与宿主机严格同步)</span>
+            </div>
+          </div>
+
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+            <button class="btn btn-sm" onclick="triggerControlResetTime()">🔄 还原对齐宿主机时间</button>
+            <button class="btn btn-sm" onclick="promptControlCustomTime()">🕒 手动模拟时间校准...</button>
+            <button class="btn btn-sm" id="btnToggleRecord" onclick="triggerControlToggleRecord()">⏺️ 切换录像 (Record ON/OFF)</button>
+            <button class="btn btn-sm btn-danger" onclick="triggerControlReboot()">⚠️ 模拟远程重启 (TeleBoot)</button>
+          </div>
+
+          <div style="border-top:1px dashed var(--border);padding-top:10px">
+            <div style="font-weight:700;font-size:12px;color:var(--text-main);margin-bottom:8px">⚡ 强制请求关键帧 (IFrameCmd / IFCDCmd)</div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <label style="font-size:12px;color:var(--text-muted)">目标通道:</label>
+              <select id="cfgCtrlIFrameChannel" style="min-width:180px"></select>
+              <button class="btn btn-sm btn-primary" onclick="triggerControlIFrame()">⚡ 立即注入 I 帧 (SPS/PPS+IDR)</button>
+            </div>
+            <div style="font-size:11px;color:var(--text-dim);margin-top:6px">
+              当平台或播放器请求强制关键帧时，模拟器会在推流循环中立即无缝注入 SPS/PPS 参数集及 IDR 关键帧，使画面快速起流或恢复解码。
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 2: 云台守望位 (Home Position) -->
+        <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px">
+          <div style="font-weight:700;font-size:13px;color:var(--text-main);margin-bottom:10px;display:flex;align-items:center;justify-content:space-between">
+            <span>🎯 云台看守位 (PTZ HomePosition)</span>
+            <span id="homePositionBadge" class="badge">未启用</span>
+          </div>
+          <div style="font-size:11px;color:var(--text-dim);line-height:1.5;margin-bottom:10px">
+            符合 <code>GB/T 28181 DeviceControl &gt; HomePosition</code> 规范。启用后，若云台停止转动超过设定空闲时间，将自动平滑转回看守预置位。
+          </div>
+
+          <div class="form-group" style="margin-bottom:10px">
+            <label class="form-label" style="font-size:12px">选择通道</label>
+            <select id="homePosChannelSelect" onchange="onHomePosChannelChange()"></select>
+          </div>
+
+          <div class="form-grid-2" style="margin-bottom:10px">
+            <div class="form-group">
+              <label class="form-label" style="font-size:12px">归位预置位号 (1-255)</label>
+              <input type="number" id="homePosPreset" min="1" max="255" value="1"/>
+            </div>
+            <div class="form-group">
+              <label class="form-label" style="font-size:12px">空闲复位时间 (秒, 1-3600)</label>
+              <input type="number" id="homePosResetSec" min="1" max="3600" value="30"/>
+            </div>
+          </div>
+
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <label style="font-size:12px;color:var(--text-muted);display:inline-flex;align-items:center;gap:6px;cursor:pointer">
+              <input type="checkbox" id="homePosEnabled"/> 启用该通道守望位联动
+            </label>
+            <span id="homePosCountdownInfo" style="font-size:11px;color:var(--text-dim)">-</span>
+          </div>
+
+          <div style="display:flex;justify-content:flex-end;gap:8px">
+            <button class="btn btn-sm btn-success" onclick="saveHomePositionConfig()">💾 保存守望位配置</button>
+          </div>
+
+          <!-- 国标参数能力快速提示卡 -->
+          <div style="border-top:1px dashed var(--border);margin-top:12px;padding-top:10px">
+            <div style="font-weight:700;font-size:12px;color:var(--text-main);margin-bottom:6px">📋 国标配置查询能力 (ConfigDownload)</div>
+            <div style="font-size:11px;color:var(--text-dim);line-height:1.6">
+              • <b>BasicParam</b>: 心跳周期 <code>60s</code> / 超时 <code>3次</code> / 定位能力 <code>1 (GPS/北斗)</code><br/>
+              • <b>VideoParamOpt</b>: 分辨率 <code>1080P/720P/D1/CIF/QCIF</code> / 支持倍速 <code>1/2/4/8/16/0.5/0.25</code><br/>
+              • <b>AudioParamOpt</b>: 音频编码 <code>G.711A (PCMA) / G.711U / AAC</code> / 采样率 <code>8000Hz</code>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Row 2: 审计流水 (Audit Log) -->
+      <div style="background:var(--surface-2);border-radius:var(--radius);padding:16px;border:1px solid var(--border)">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div>
+            <div style="font-weight:700;font-size:13px;color:var(--text-main)">📜 远程控制与配置审计流水日志 (Audit Log - 最近 50 条)</div>
+            <div style="font-size:11px;color:var(--text-dim);margin-top:2px">
+              记录所有来自上级 SIP 平台信令及 Web 控制台的配置修改、校时、强制关键帧、远程重启及云台守望位指令。
+            </div>
+          </div>
+          <button class="btn btn-sm" onclick="loadConfigCtrlData(true)">🔄 刷新流水</button>
+        </div>
+        <div id="cfgCtrlAuditContainer" style="overflow-x:auto;max-height:360px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm)">
+          <!-- Audit logs rendered here -->
+        </div>
+      </div>
+    </div>
+  </div>
 
 <!-- Modal: New Device -->
 <div class="modal-mask" id="newDeviceModal">
@@ -1493,11 +1607,13 @@ function switchWorkbenchTab(tab, btn){
   document.getElementById('tabAlarms').style.display = (tab==='alarms' ? 'block' : 'none');
   document.getElementById('tabGPS').style.display = (tab==='gps' ? 'block' : 'none');
   document.getElementById('tabSubs').style.display = (tab==='subs' ? 'block' : 'none');
+  document.getElementById('tabConfigCtrl').style.display = (tab==='configctrl' ? 'block' : 'none');
   document.getElementById('tabLogs').style.display = (tab==='logs' ? 'block' : 'none');
   document.getElementById('tabRecords').style.display = (tab==='records' ? 'block' : 'none');
   if(tab==='alarms') loadDeviceAlarms();
   if(tab==='gps') loadGPSStatus(true);
   if(tab==='subs') loadSubscriptions();
+  if(tab==='configctrl') loadConfigCtrlData();
   if(tab==='logs') loadLogs();
   if(tab==='records') loadDeviceRecords();
 }
@@ -1697,6 +1813,9 @@ async function loadActiveDeviceDetail(){
   }
   if(document.getElementById('tabSubs').style.display !== 'none'){
     loadSubscriptions();
+  }
+  if(document.getElementById('tabConfigCtrl') && document.getElementById('tabConfigCtrl').style.display !== 'none'){
+    loadConfigCtrlData(false);
   }
 }
 
@@ -3377,6 +3496,304 @@ function quickCatalogNotify(chId){
     const chSel = document.getElementById('catNotifyChannelSelect');
     if(chSel) chSel.value = chId;
   }, 100);
+}
+
+// ==================== Remote Device Config & Control ====================
+let configCtrlActiveChannel = '';
+
+async function loadConfigCtrlData(manual){
+  if(!activeDeviceId) return;
+  const dev = (devices || []).find(function(d){ return d.id === activeDeviceId; });
+  const st = (activeDeviceData && activeDeviceData.status) ? activeDeviceData.status : (dev || {});
+
+  // Update Recording badge & toggle button
+  const recBadge = document.getElementById('cfgCtrlRecordBadge');
+  const btnToggleRec = document.getElementById('btnToggleRecord');
+  const isRec = !!st.recording;
+  if(recBadge){
+    recBadge.className = 'badge ' + (isRec ? 'on' : 'off');
+    recBadge.textContent = isRec ? '⏺️ 录像中 (ON)' : '⏹️ 未录像 (OFF)';
+  }
+  if(btnToggleRec){
+    btnToggleRec.textContent = isRec ? '⏹️ 停止录像 (Record OFF)' : '⏺️ 开启录像 (Record ON)';
+  }
+
+  // Update Reboot badge
+  const rebootBadge = document.getElementById('cfgCtrlRebootBadge');
+  if(rebootBadge){
+    if(st.rebooting){
+      rebootBadge.className = 'badge warn';
+      rebootBadge.textContent = '⚠️ 正在重启中...';
+    } else {
+      rebootBadge.className = 'badge on';
+      rebootBadge.textContent = '🟢 运行正常';
+    }
+  }
+
+  // Update Device Time & Offset
+  const devTimeEl = document.getElementById('cfgCtrlDeviceTime');
+  const devOffsetEl = document.getElementById('cfgCtrlTimeOffset');
+  const offsetSec = st.timeOffsetSec || 0;
+  if(devTimeEl){
+    if(st.deviceTime){
+      devTimeEl.textContent = st.deviceTime.replace('T', ' ').substring(0, 19);
+    } else {
+      const now = new Date(Date.now() + offsetSec * 1000);
+      devTimeEl.textContent = now.toISOString().replace('T', ' ').substring(0, 19);
+    }
+  }
+  if(devOffsetEl){
+    if(offsetSec === 0){
+      devOffsetEl.textContent = '0s (与宿主机严格同步)';
+      devOffsetEl.style.color = 'var(--text-muted)';
+    } else {
+      devOffsetEl.textContent = (offsetSec > 0 ? '+' : '') + offsetSec + 's (平台校时偏移)';
+      devOffsetEl.style.color = '#38bdf8';
+    }
+  }
+
+  // Populate channel dropdowns
+  const iframeChSel = document.getElementById('cfgCtrlIFrameChannel');
+  const homeChSel = document.getElementById('homePosChannelSelect');
+  const channels = (activeDeviceData && activeDeviceData.profile && activeDeviceData.profile.device && activeDeviceData.profile.device.channels) || [];
+  
+  if(channels.length > 0 && !configCtrlActiveChannel){
+    configCtrlActiveChannel = channels[0].id;
+  }
+
+  if(iframeChSel && iframeChSel.options.length !== channels.length){
+    const prev = iframeChSel.value;
+    iframeChSel.innerHTML = channels.map(function(c){
+      return '<option value="' + esc(c.id) + '">' + esc(c.name) + ' (' + esc(c.id) + ')</option>';
+    }).join('');
+    if(prev) iframeChSel.value = prev;
+    else if(channels.length > 0) iframeChSel.value = channels[0].id;
+  }
+
+  if(homeChSel && homeChSel.options.length !== channels.length){
+    const prev = homeChSel.value;
+    homeChSel.innerHTML = channels.map(function(c){
+      return '<option value="' + esc(c.id) + '">' + esc(c.name) + ' (' + esc(c.id) + ')</option>';
+    }).join('');
+    if(prev) homeChSel.value = prev;
+    else if(channels.length > 0) homeChSel.value = channels[0].id;
+    configCtrlActiveChannel = homeChSel.value;
+  }
+
+  // Fetch PTZ Home Position info for current selected channel
+  const targetChannel = homeChSel ? homeChSel.value : configCtrlActiveChannel;
+  if(targetChannel){
+    try{
+      const ptzRes = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/ptz?channel=' + encodeURIComponent(targetChannel));
+      if(ptzRes && ptzRes.ptz){
+        renderHomePositionStatus(ptzRes.ptz);
+      }
+    }catch(e){}
+  }
+
+  // Fetch Audit Logs
+  try{
+    const auditRes = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/control/events');
+    if(auditRes && auditRes.events){
+      renderAuditLogs(auditRes.events);
+    }
+  }catch(e){}
+
+  if(manual){
+    showToast('已刷新设备控制状态与审计流水', 'info');
+  }
+}
+
+function onHomePosChannelChange(){
+  const homeChSel = document.getElementById('homePosChannelSelect');
+  if(homeChSel){
+    configCtrlActiveChannel = homeChSel.value;
+    loadConfigCtrlData(false);
+  }
+}
+
+function renderHomePositionStatus(ptz){
+  const badge = document.getElementById('homePositionBadge');
+  const enCheck = document.getElementById('homePosEnabled');
+  const presetIn = document.getElementById('homePosPreset');
+  const resetIn = document.getElementById('homePosResetSec');
+  const cdInfo = document.getElementById('homePosCountdownInfo');
+
+  if(enCheck) enCheck.checked = !!ptz.homePositionEnabled;
+  if(presetIn && ptz.homePositionPreset) presetIn.value = ptz.homePositionPreset;
+  if(resetIn && ptz.homePositionResetSec) resetIn.value = ptz.homePositionResetSec;
+
+  if(badge){
+    if(ptz.homePositionEnabled){
+      badge.className = 'badge on';
+      badge.textContent = '已启用 (预置位 #' + (ptz.homePositionPreset || 1) + ')';
+    } else {
+      badge.className = 'badge off';
+      badge.textContent = '未启用';
+    }
+  }
+
+  if(cdInfo){
+    if(ptz.homePositionEnabled){
+      const cd = ptz.homeCountdownSec || 0;
+      if(cd > 0){
+        cdInfo.innerHTML = '⏱️ 空闲中：距自动归位还剩 <b style="color:var(--primary)">' + cd + 's</b>';
+      } else {
+        cdInfo.innerHTML = '✅ 当前处于守望位或转动中';
+      }
+    } else {
+      cdInfo.textContent = '尚未配置守望位';
+    }
+  }
+}
+
+function renderAuditLogs(events){
+  const container = document.getElementById('cfgCtrlAuditContainer');
+  if(!container) return;
+
+  if(!events || events.length === 0){
+    container.innerHTML = '<div style="color:var(--text-dim);padding:24px;text-align:center">暂无远程配置或控制操作流水。<br/><span style="font-size:12px;color:var(--text-muted)">当上级平台下发 ConfigDownload / DeviceConfig / DeviceControl，或通过此工作台执行操作时，审计记录将自动呈现在此。</span></div>';
+    return;
+  }
+
+  // Newest first
+  const rows = events.map(function(ev, idx){
+    const t = ev.time ? ev.time.replace('T', ' ').substring(0, 19) : '-';
+    let cmdBadge = '<span class="badge" style="font-size:10px">' + esc(ev.cmdType) + '</span>';
+    if(ev.cmdType === 'ConfigDownload') cmdBadge = '<span class="badge" style="background:#0284c7;color:#fff;font-size:10px">📥 ConfigDownload</span>';
+    else if(ev.cmdType === 'DeviceConfig') cmdBadge = '<span class="badge" style="background:#8b5cf6;color:#fff;font-size:10px">⚙️ DeviceConfig</span>';
+    else if(ev.cmdType === 'DeviceControl') cmdBadge = '<span class="badge" style="background:#f59e0b;color:#fff;font-size:10px">🎮 DeviceControl</span>';
+
+    let srcBadge = '<span style="font-size:11px;color:var(--text-muted)">' + esc(ev.source) + '</span>';
+    if(ev.source && ev.source.indexOf('SIP') >= 0) srcBadge = '<span style="color:#38bdf8;font-weight:600">🌐 ' + esc(ev.source) + '</span>';
+    else if(ev.source && ev.source.indexOf('UI') >= 0) srcBadge = '<span style="color:#a78bfa;font-weight:600">🖥️ ' + esc(ev.source) + '</span>';
+
+    let statusBadge = '<span class="badge on" style="font-size:10px">SUCCESS</span>';
+    if(ev.status && ev.status.toLowerCase().indexOf('fail') >= 0){
+      statusBadge = '<span class="badge danger" style="font-size:10px">' + esc(ev.status) + '</span>';
+    } else if(ev.status){
+      statusBadge = '<span class="badge on" style="font-size:10px">' + esc(ev.status) + '</span>';
+    }
+
+    return '<tr>' +
+      '<td style="color:var(--text-dim)">' + (idx + 1) + '</td>' +
+      '<td style="font-size:11px;color:var(--text-dim)">' + esc(t) + '</td>' +
+      '<td>' + cmdBadge + '</td>' +
+      '<td>' + srcBadge + '</td>' +
+      '<td style="font-family:var(--font-mono);font-size:11px;color:#93c5fd">' + esc(ev.channelId || '-') + '</td>' +
+      '<td style="font-size:12px;color:var(--text-main)">' + esc(ev.detail) + '</td>' +
+      '<td>' + statusBadge + '</td>' +
+    '</tr>';
+  }).join('');
+
+  container.innerHTML = '<table class="rec-table">' +
+    '<thead>' +
+      '<tr>' +
+        '<th style="width:36px">#</th>' +
+        '<th style="width:140px">时间戳</th>' +
+        '<th style="width:140px">指令类型</th>' +
+        '<th style="width:130px">操作来源</th>' +
+        '<th style="width:170px">通道/对象</th>' +
+        '<th>事件详情</th>' +
+        '<th style="width:90px">执行状态</th>' +
+      '</tr>' +
+    '</thead>' +
+    '<tbody>' + rows + '</tbody>' +
+  '</table>';
+}
+
+async function triggerControlIFrame(){
+  if(!activeDeviceId) return;
+  const sel = document.getElementById('cfgCtrlIFrameChannel');
+  const chId = sel ? sel.value : '';
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/control/iframe', 'POST', {
+    channelId: chId
+  });
+  if(j && j.ok){
+    showToast(j.applied ? '⚡ 强制关键帧指令已下发并注入推流会话 (SPS/PPS+IDR)' : '⚡ 关键帧请求已记录（当前通道尚未处于活跃推流中）', 'success');
+    loadConfigCtrlData(false);
+  }
+}
+
+async function triggerControlReboot(){
+  if(!activeDeviceId) return;
+  if(!confirm('确定要模拟远程重启该设备吗？\n设备将注销 SIP 注册、停止推流，3秒后自动重新启动并重新注册。')) return;
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/control/reboot', 'POST', {});
+  if(j && j.ok){
+    showToast('⚠️ 设备远程重启流程已启动，3秒后将自动重新注册', 'warning');
+    setTimeout(function(){ refreshAll(); }, 500);
+    setTimeout(function(){ refreshAll(); }, 3500);
+  }
+}
+
+async function triggerControlToggleRecord(){
+  if(!activeDeviceId) return;
+  const dev = (devices || []).find(function(d){ return d.id === activeDeviceId; });
+  const st = (activeDeviceData && activeDeviceData.status) ? activeDeviceData.status : (dev || {});
+  const nextRec = !st.recording;
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/control/record', 'POST', {
+    recording: nextRec
+  });
+  if(j && j.ok){
+    showToast('录像状态已切换为: ' + (nextRec ? 'ON (正在录像)' : 'OFF (未录像)'), 'success');
+    refreshAll();
+    loadConfigCtrlData(false);
+  }
+}
+
+async function triggerControlResetTime(){
+  if(!activeDeviceId) return;
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/control/time', 'POST', {
+    reset: true
+  });
+  if(j && j.ok){
+    showToast('设备时钟已重置，与当前宿主机系统时间对齐', 'success');
+    refreshAll();
+    loadConfigCtrlData(false);
+  }
+}
+
+async function promptControlCustomTime(){
+  if(!activeDeviceId) return;
+  const currentVal = (new Date()).toISOString().replace('T', ' ').substring(0, 19);
+  const val = prompt('请输入要模拟设置的设备时间 (格式: YYYY-MM-DD HH:mm:ss 或 HH:mm:ss):', currentVal);
+  if(!val) return;
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/control/time', 'POST', {
+    time: val.trim()
+  });
+  if(j && j.ok){
+    showToast('设备虚拟时钟校准成功: ' + j.deviceTime, 'success');
+    refreshAll();
+    loadConfigCtrlData(false);
+  }
+}
+
+async function saveHomePositionConfig(){
+  if(!activeDeviceId) return;
+  const chSel = document.getElementById('homePosChannelSelect');
+  const enCheck = document.getElementById('homePosEnabled');
+  const presetIn = document.getElementById('homePosPreset');
+  const resetIn = document.getElementById('homePosResetSec');
+  if(!chSel) return;
+
+  const chId = chSel.value;
+  const enabled = !!(enCheck && enCheck.checked);
+  const preset = parseInt(presetIn ? presetIn.value : '1', 10) || 1;
+  const resetSec = parseInt(resetIn ? resetIn.value : '30', 10) || 30;
+
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/control/home-position', 'POST', {
+    channelId: chId,
+    enabled: enabled,
+    presetIndex: preset,
+    resetSec: resetSec
+  });
+  if(j && j.ok){
+    showToast('💾 通道 ' + chId + ' 守望位配置已保存并生效', 'success');
+    if(j.ptz){
+      renderHomePositionStatus(j.ptz);
+    }
+    loadConfigCtrlData(false);
+  }
 }
 
 // Video Library Modal & Player

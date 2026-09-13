@@ -126,6 +126,13 @@ func (s *PTZSource) Seek(offsetSec float64, fps int) (float64, error) {
 	return offsetSec, nil
 }
 
+// ForceIFrame 强制下一帧立即生成并输出 SPS/PPS + IDR 帧
+func (s *PTZSource) ForceIFrame() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastTime = time.Time{} // 清空节流时间，立即生成下一帧
+}
+
 func (s *PTZSource) Next() ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

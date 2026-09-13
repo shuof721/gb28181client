@@ -39,7 +39,25 @@ type Device struct {
 	gpsMgr   *GPSManager
 	subMgr   *SubscriptionManager
 
+	timeOffset  atomic.Int64 // 虚拟时钟校时偏移 (纳秒)
+	isRecording atomic.Bool  // 是否处于录像状态
+	isRebooting atomic.Bool  // 是否处于模拟重启中
+
+	controlEventsMu sync.RWMutex
+	controlEvents   []ControlEventRecord
+
 	OnConfigChanged func(cfg *config.Config)
+}
+
+// ControlEventRecord 平台远程控制与配置下发审计日志记录
+type ControlEventRecord struct {
+	ID       string `json:"id"`
+	Time     string `json:"time"`
+	CmdType  string `json:"cmdType"`
+	DeviceID string `json:"deviceId"`
+	Action   string `json:"action"`
+	Detail   string `json:"detail"`
+	Source   string `json:"source"`
 }
 
 func New(cfg *config.Config) *Device {
@@ -175,6 +193,92 @@ func (d *Device) SubscriptionManager() *SubscriptionManager {
 	return d.subMgr
 }
 
+// Now 返回考虑虚拟时钟校准偏移后的设备当前时刻
+func (d *Device) Now() time.Time {
+	offset := d.timeOffset.Load()
+	if offset == 0 {
+		return time.Now()
+	}
+	return time.Now().Add(time.Duration(offset))
+}
+
+// SetTimeOffset 设置虚拟时钟校准偏移
+func (d *Device) SetTimeOffset(offset time.Duration) {
+	d.timeOffset.Store(int64(offset))
+	log.Printf("[device] %s virtual clock offset set to %.1fs (target time: %s)",
+		d.cfg.Device.ID, offset.Seconds(), d.Now().Format("2006-01-02 15:04:05"))
+}
+
+func (d *Device) IsRecording() bool {
+	return d.isRecording.Load()
+}
+
+func (d *Device) SetRecording(rec bool) {
+	d.isRecording.Store(rec)
+	log.Printf("[device] %s recording status set to %v", d.cfg.Device.ID, rec)
+}
+
+func (d *Device) IsRebooting() bool {
+	return d.isRebooting.Load()
+}
+
+func (d *Device) recordControlEvent(cmdType, devID, action, detail, source string) {
+	d.controlEventsMu.Lock()
+	defer d.controlEventsMu.Unlock()
+	evt := ControlEventRecord{
+		ID:       fmt.Sprintf("evt-%d", time.Now().UnixNano()),
+		Time:     d.Now().Format("2006-01-02 15:04:05"),
+		CmdType:  cmdType,
+		DeviceID: devID,
+		Action:   action,
+		Detail:   detail,
+		Source:   source,
+	}
+	d.controlEvents = append(d.controlEvents, evt)
+	if len(d.controlEvents) > 50 {
+		d.controlEvents = d.controlEvents[len(d.controlEvents)-50:]
+	}
+}
+
+func (d *Device) GetControlEvents() []ControlEventRecord {
+	d.controlEventsMu.RLock()
+	defer d.controlEventsMu.RUnlock()
+	res := make([]ControlEventRecord, len(d.controlEvents))
+	copy(res, d.controlEvents)
+	// 倒序排列，最新事件在前
+	for i, j := 0, len(res)-1; i < j; i, j = i+1, j-1 {
+		res[i], res[j] = res[j], res[i]
+	}
+	return res
+}
+
+func (d *Device) triggerSimulatedReboot() {
+	if d.isRebooting.Swap(true) {
+		return
+	}
+	defer d.isRebooting.Store(false)
+
+	log.Printf("[device] %s simulated reboot initiating...", d.cfg.Device.ID)
+	// 1. 停止当前所有正在推流的媒体会话
+	if d.ms != nil {
+		d.ms.StopAll()
+	}
+	// 2. 向平台注销 (Expires: 0)
+	if d.ua != nil {
+		_ = d.ua.Unregister()
+	}
+
+	// 模拟硬件关机重启耗时 (3秒)
+	time.Sleep(3 * time.Second)
+
+	// 3. 重新向平台发起注册恢复服务
+	if d.ua != nil {
+		log.Printf("[device] %s simulated reboot recovering, re-registering...", d.cfg.Device.ID)
+		_ = d.ua.Register(d.cfg.SIP.Expires)
+	}
+	log.Printf("[device] %s simulated reboot completed", d.cfg.Device.ID)
+}
+
 func (d *Device) Status() Status {
 	sess := d.ms.ListSessions()
 	sessions := make([]any, 0, len(sess))
@@ -242,25 +346,29 @@ func (d *Device) Status() Status {
 	}
 
 	return Status{
-		Registered:   d.ua.IsRegistered(),
-		DeviceID:     deviceID,
-		DeviceName:   deviceName,
-		Server:       server,
-		Local:        local,
-		Transport:    transport,
-		MediaMode:    mode,
-		MediaSource:  src,
-		GuardStatus:  guardStatus,
-		DutyStatus:   dutyStatus,
-		AutoAlarm:    autoAlarm,
-		Alarms:       recentAlarms,
-		Channels:     chs,
-		Sessions:     sessions,
-		TalkSessions: talkSessions,
-		GPS:          gpsSt,
-		Subscribers:  subCount,
-		UptimeSec:    up,
-		StartedAt:    d.startedAt,
+		Registered:    d.ua.IsRegistered(),
+		DeviceID:      deviceID,
+		DeviceName:    deviceName,
+		Server:        server,
+		Local:         local,
+		Transport:     transport,
+		MediaMode:     mode,
+		MediaSource:   src,
+		GuardStatus:   guardStatus,
+		DutyStatus:    dutyStatus,
+		AutoAlarm:     autoAlarm,
+		Alarms:        recentAlarms,
+		Channels:      chs,
+		Sessions:      sessions,
+		TalkSessions:  talkSessions,
+		GPS:           gpsSt,
+		Subscribers:   subCount,
+		UptimeSec:     up,
+		StartedAt:     d.startedAt,
+		Recording:     d.isRecording.Load(),
+		Rebooting:     d.isRebooting.Load(),
+		TimeOffsetSec: int64(time.Duration(d.timeOffset.Load()).Seconds()),
+		DeviceTime:    d.Now().Format("2006-01-02 15:04:05"),
 	}
 }
 
@@ -815,13 +923,9 @@ func (d *Device) handleMANSCDP(root *gb28181.Root, m *sip.Message, src net.Addr)
 		// 国标 4.3.4 规范：收到 Broadcast Notify 并回复 200 OK 后，设备作为 UAC 主动向平台发起 INVITE
 		go d.startBroadcastInvite(root.SourceID, root.TargetID)
 	case "configdownload":
-		// 简单回复空
-		d.replyMANSCDP(root, m, src, map[string]any{
-			"CmdType": root.CmdType,
-			"SN":      root.SN,
-			"DeviceID": d.cfg.Device.ID,
-			"Result":  "OK",
-		})
+		d.respConfigDownload(root, m, src)
+	case "deviceconfig":
+		d.onDeviceConfig(root, m, src)
 	default:
 		log.Printf("[gb] unhandled CmdType=%s", root.CmdType)
 	}
@@ -1012,6 +1116,11 @@ func (d *Device) respDeviceStatus(root *gb28181.Root, req *sip.Message, src net.
 		asBuilder.WriteString("  </Alarmstatus>\r\n")
 	}
 
+	recStatus := "OFF"
+	if d.isRecording.Load() {
+		recStatus = "ON"
+	}
+
 	body := d.buildXMLResponse(map[string]any{
 		"CmdType":     "DeviceStatus",
 		"SN":          root.SN,
@@ -1020,8 +1129,8 @@ func (d *Device) respDeviceStatus(root *gb28181.Root, req *sip.Message, src net.
 		"Online":      "ONLINE",
 		"Status":      "OK",
 		"Encode":      "ON",
-		"Record":      "OFF",
-		"DeviceTime":  time.Now().Format("2006-01-02T15:04:05"),
+		"Record":      recStatus,
+		"DeviceTime":  d.Now().Format("2006-01-02T15:04:05"),
 		"Alarmstatus": asBuilder.String(),
 	})
 	targetID := req.FromUser()
@@ -1032,8 +1141,211 @@ func (d *Device) respDeviceStatus(root *gb28181.Root, req *sip.Message, src net.
 	if err != nil {
 		log.Printf("[gb] devicestatus response failed: %v", err)
 	} else {
-		log.Printf("[gb] devicestatus response sent to %s (channels=%d)", targetID, len(channels))
+		log.Printf("[gb] devicestatus response sent to %s (channels=%d record=%s)", targetID, len(channels), recStatus)
 	}
+}
+
+func (d *Device) respConfigDownload(root *gb28181.Root, req *sip.Message, src net.Addr) {
+	var query gb28181.ConfigDownloadReq
+	if err := unmarshalBody(req.Body, &query); err != nil {
+		log.Printf("[gb] configdownload parse query failed: %v", err)
+	}
+
+	targetID := strings.TrimSpace(query.DeviceID)
+	if targetID == "" {
+		targetID = strings.TrimSpace(root.DeviceID)
+	}
+	targetID = config.NormalizeGBID(targetID)
+	if targetID == "" {
+		targetID = d.cfg.Device.ID
+	}
+
+	cfgType := strings.TrimSpace(query.ConfigType)
+	d.recordControlEvent("ConfigDownload", targetID, "配置查询", fmt.Sprintf("ConfigType=%s", cfgType), src.String())
+
+	fields := map[string]any{
+		"CmdType":  "ConfigDownload",
+		"SN":       root.SN,
+		"DeviceID": targetID,
+		"Result":   "OK",
+	}
+
+	switch strings.ToLower(cfgType) {
+	case "videoparamopt":
+		fields["VideoParamOpt"] = "\r\n    <DownloadSpeed>1/2/4</DownloadSpeed>\r\n    <Resolution>1920*1080/1280*720/704*576</Resolution>\r\n  "
+	case "audioparamopt":
+		fields["AudioParamOpt"] = "\r\n    <AudioFormat>G.711A/G.711U/AAC</AudioFormat>\r\n    <SamplingRate>8/16/32</SamplingRate>\r\n  "
+	default: // "basicparam" 或空
+		d.cfgRLock()
+		devName := d.cfg.Device.Name
+		expires := d.cfg.SIP.Expires
+		interval := d.cfg.SIP.KeepaliveInterval
+		if interval <= 0 {
+			interval = 60
+		}
+		timeoutCnt := d.cfg.SIP.KeepaliveTimeoutCount
+		if timeoutCnt <= 0 {
+			timeoutCnt = 3
+		}
+		if targetID != d.cfg.Device.ID {
+			for _, ch := range d.cfg.Device.Channels {
+				if ch.ID == targetID {
+					devName = ch.Name
+					break
+				}
+			}
+		}
+		d.cfgRUnlock()
+
+		gpsSt := GPSStatus{Longitude: 116.397428, Latitude: 39.909230}
+		if d.gpsMgr != nil {
+			gpsSt = d.gpsMgr.Current(targetID)
+		}
+
+		var bp strings.Builder
+		bp.WriteString("\r\n")
+		fmt.Fprintf(&bp, "    <Name>%s</Name>\r\n", devName)
+		fmt.Fprintf(&bp, "    <Expiration>%d</Expiration>\r\n", expires)
+		fmt.Fprintf(&bp, "    <HeartBeatInterval>%d</HeartBeatInterval>\r\n", interval)
+		fmt.Fprintf(&bp, "    <HeartBeatCount>%d</HeartBeatCount>\r\n", timeoutCnt)
+		bp.WriteString("    <PositionCapability>1</PositionCapability>\r\n")
+		fmt.Fprintf(&bp, "    <Longitude>%.6f</Longitude>\r\n", gpsSt.Longitude)
+		fmt.Fprintf(&bp, "    <Latitude>%.6f</Latitude>\r\n  ", gpsSt.Latitude)
+
+		fields["BasicParam"] = bp.String()
+	}
+
+	d.replyMANSCDP(root, req, src, fields)
+}
+
+func (d *Device) onDeviceConfig(root *gb28181.Root, req *sip.Message, src net.Addr) {
+	var cfgReq gb28181.DeviceConfigReq
+	if err := unmarshalBody(req.Body, &cfgReq); err != nil {
+		log.Printf("[gb] deviceconfig parse error: %v", err)
+	}
+
+	targetID := strings.TrimSpace(cfgReq.DeviceID)
+	if targetID == "" {
+		targetID = strings.TrimSpace(root.DeviceID)
+	}
+	targetID = config.NormalizeGBID(targetID)
+	if targetID == "" {
+		targetID = d.cfg.Device.ID
+	}
+
+	var actions []string
+
+	// 1. 处理时间校准 (Time / Date)
+	timeStr := strings.TrimSpace(cfgReq.Time)
+	dateStr := strings.TrimSpace(cfgReq.Date)
+	var fullTimeStr string
+	if dateStr != "" && timeStr != "" && !strings.Contains(timeStr, "-") {
+		fullTimeStr = dateStr + "T" + timeStr
+	} else if timeStr != "" {
+		fullTimeStr = timeStr
+	} else if dateStr != "" {
+		fullTimeStr = dateStr
+	}
+
+	if fullTimeStr != "" {
+		var targetTime time.Time
+		var parseErr error
+		layouts := []string{
+			"2006-01-02T15:04:05",
+			"2006-01-02 15:04:05",
+			"2006-01-02T15:04:05.000",
+			"2006-01-02",
+		}
+		for _, layout := range layouts {
+			if t, err := time.ParseInLocation(layout, fullTimeStr, time.Local); err == nil {
+				targetTime = t
+				parseErr = nil
+				break
+			} else {
+				parseErr = err
+			}
+		}
+		if parseErr == nil && !targetTime.IsZero() {
+			offset := targetTime.Sub(time.Now())
+			d.timeOffset.Store(int64(offset))
+			actions = append(actions, fmt.Sprintf("校时至 %s (偏差 %.1fs)", targetTime.Format("15:04:05"), offset.Seconds()))
+			log.Printf("[gb] DeviceConfig Time synced to %s (offset=%.1fs)", targetTime.Format("2006-01-02 15:04:05"), offset.Seconds())
+		}
+	}
+
+	// 2. 处理 BasicParam
+	if cfgReq.BasicParam != nil {
+		bp := cfgReq.BasicParam
+		d.cfgLock()
+		changed := false
+		if bp.Name != "" {
+			if targetID == d.cfg.Device.ID {
+				d.cfg.Device.Name = bp.Name
+				changed = true
+				actions = append(actions, fmt.Sprintf("修改设备名: %s", bp.Name))
+			} else {
+				for i := range d.cfg.Device.Channels {
+					if d.cfg.Device.Channels[i].ID == targetID {
+						d.cfg.Device.Channels[i].Name = bp.Name
+						changed = true
+						actions = append(actions, fmt.Sprintf("修改通道名: %s", bp.Name))
+						break
+					}
+				}
+			}
+		}
+		if bp.HeartBeatInterval > 0 {
+			d.cfg.SIP.KeepaliveInterval = bp.HeartBeatInterval
+			changed = true
+			actions = append(actions, fmt.Sprintf("心跳周期: %ds", bp.HeartBeatInterval))
+		}
+		if bp.HeartBeatCount > 0 {
+			d.cfg.SIP.KeepaliveTimeoutCount = bp.HeartBeatCount
+			changed = true
+			actions = append(actions, fmt.Sprintf("心跳超时次数: %d", bp.HeartBeatCount))
+		}
+		onCh := d.OnConfigChanged
+		curCfg := d.cfg
+		d.cfgUnlock()
+
+		if changed && onCh != nil {
+			onCh(curCfg)
+		}
+
+		// 若修改了通道名称，自动向已订阅平台推送 Catalog UPDATE 增量通知！
+		if bp.Name != "" && targetID != d.cfg.Device.ID {
+			var updatedCh config.ChannelConfig
+			for _, c := range curCfg.Device.Channels {
+				if c.ID == targetID {
+					updatedCh = c
+					break
+				}
+			}
+			if updatedCh.ID != "" {
+				go d.NotifyCatalogChange("UPDATE", updatedCh)
+			}
+		}
+	}
+
+	// 3. 处理 VideoParamOpt
+	if cfgReq.VideoParamOpt != nil {
+		vp := cfgReq.VideoParamOpt
+		actions = append(actions, fmt.Sprintf("视频参数下发: res=%s speed=%s", vp.Resolution, vp.DownloadSpeed))
+	}
+
+	detail := strings.Join(actions, ", ")
+	if detail == "" {
+		detail = "参数无变更"
+	}
+	d.recordControlEvent("DeviceConfig", targetID, "配置下发", detail, src.String())
+
+	// 回复 Response 200 OK
+	go d.replyMANSCDP(root, req, src, map[string]any{
+		"CmdType":  "DeviceConfig",
+		"SN":       root.SN,
+		"DeviceID": targetID,
+		"Result":   "OK",
+	})
 }
 
 func (d *Device) onDeviceControl(root *gb28181.Root, req *sip.Message, src net.Addr) {
@@ -1079,6 +1391,7 @@ func (d *Device) onDeviceControl(root *gb28181.Root, req *sip.Message, src net.A
 			}
 		}
 		log.Printf("[gb] DeviceControl GuardCmd=%s on %s => isGuard=%v (cascaded=%v)", guardCmd, channelID, isGuard, channelID == rootDevID)
+		d.recordControlEvent("DeviceControl", channelID, "布撤防", fmt.Sprintf("GuardCmd=%s", guardCmd), src.String())
 		go d.replyMANSCDP(root, req, src, map[string]any{
 			"CmdType":  "DeviceControl",
 			"SN":       root.SN,
@@ -1097,6 +1410,7 @@ func (d *Device) onDeviceControl(root *gb28181.Root, req *sip.Message, src net.A
 				}
 			}
 			log.Printf("[gb] DeviceControl AlarmCmd=%s on %s => Reset OK", alarmCmd, channelID)
+			d.recordControlEvent("DeviceControl", channelID, "报警复位", fmt.Sprintf("AlarmCmd=%s", alarmCmd), src.String())
 			go d.replyMANSCDP(root, req, src, map[string]any{
 				"CmdType":  "DeviceControl",
 				"SN":       root.SN,
@@ -1104,14 +1418,56 @@ func (d *Device) onDeviceControl(root *gb28181.Root, req *sip.Message, src net.A
 				"Result":   "OK",
 			})
 		}
-	} else if ctrl.TeleBoot != "" {
-		log.Printf("[gb] DeviceControl TeleBoot=%s on %s => Reboot OK", ctrl.TeleBoot, channelID)
+	} else if ctrl.IsForceIFrame() {
+		applied := false
+		if d.ms != nil {
+			applied = d.ms.ForceIFrame(channelID)
+		}
+		log.Printf("[gb] DeviceControl Force I-Frame on %s => applied=%v", channelID, applied)
+		d.recordControlEvent("DeviceControl", channelID, "强制关键帧", fmt.Sprintf("Force I-Frame (stream=%v)", applied), src.String())
 		go d.replyMANSCDP(root, req, src, map[string]any{
 			"CmdType":  "DeviceControl",
 			"SN":       root.SN,
 			"DeviceID": channelID,
 			"Result":   "OK",
 		})
+	} else if ctrl.RecordCmd != "" {
+		isRec := strings.EqualFold(ctrl.RecordCmd, "Record") || ctrl.RecordCmd == "1" || strings.EqualFold(ctrl.RecordCmd, "StartRecord")
+		d.isRecording.Store(isRec)
+		log.Printf("[gb] DeviceControl RecordCmd=%s on %s => isRecording=%v", ctrl.RecordCmd, channelID, isRec)
+		d.recordControlEvent("DeviceControl", channelID, "录像控制", fmt.Sprintf("RecordCmd=%s => %v", ctrl.RecordCmd, isRec), src.String())
+		go d.replyMANSCDP(root, req, src, map[string]any{
+			"CmdType":  "DeviceControl",
+			"SN":       root.SN,
+			"DeviceID": channelID,
+			"Result":   "OK",
+		})
+	} else if ctrl.HomePosition != nil {
+		hp := ctrl.HomePosition
+		enabled := hp.Enabled == "1" || strings.EqualFold(hp.Enabled, "true") || hp.HomePositionReset == "1"
+		ptz := d.GetChannelPTZ(channelID)
+		st := ptz.SetHomePosition(enabled, hp.PresetIndex, hp.ResetTime)
+		log.Printf("[gb] DeviceControl HomePosition on %s => enabled=%v preset=%d resetTime=%ds",
+			channelID, enabled, hp.PresetIndex, hp.ResetTime)
+		d.recordControlEvent("DeviceControl", channelID, "守望位设置",
+			fmt.Sprintf("enabled=%v preset=%d resetTime=%ds (status=%s)", enabled, hp.PresetIndex, hp.ResetTime, st.StatusDesc),
+			src.String())
+		go d.replyMANSCDP(root, req, src, map[string]any{
+			"CmdType":  "DeviceControl",
+			"SN":       root.SN,
+			"DeviceID": channelID,
+			"Result":   "OK",
+		})
+	} else if ctrl.TeleBoot != "" {
+		log.Printf("[gb] DeviceControl TeleBoot=%s on %s => Reboot OK, starting reboot sequence...", ctrl.TeleBoot, channelID)
+		d.recordControlEvent("DeviceControl", channelID, "远程重启", "TeleBoot=Boot", src.String())
+		go d.replyMANSCDP(root, req, src, map[string]any{
+			"CmdType":  "DeviceControl",
+			"SN":       root.SN,
+			"DeviceID": channelID,
+			"Result":   "OK",
+		})
+		go d.triggerSimulatedReboot()
 	} else if ctrl.PTZCmd != "" {
 		ptzCmd, err := gb28181.ParsePTZCmd(ctrl.PTZCmd)
 		if err != nil {
@@ -1124,6 +1480,9 @@ func (d *Device) onDeviceControl(root *gb28181.Root, req *sip.Message, src net.A
 			} else {
 				log.Printf("[gb] PTZ %s on %s => action=%s (%s), current pos (pan=%.1f° tilt=%.1f° zoom=%.1fx focus=%.0f%% iris=%.0f%%)",
 					ctrl.PTZCmd, channelID, ptzCmd.Action, ptzCmd.Description, st.Pan, st.Tilt, st.Zoom, st.Focus, st.Iris)
+				if ptzCmd.Action == gb28181.PTZActionPresetCall || ptzCmd.Action == gb28181.PTZActionPresetSet || ptzCmd.Action == gb28181.PTZActionPresetDelete {
+					d.recordControlEvent("DeviceControl", channelID, "预置位控制", fmt.Sprintf("%s (%s)", ptzCmd.Description, ctrl.PTZCmd), src.String())
+				}
 			}
 		}
 	} else if ctrl.DragZoomIn != nil {
@@ -1132,12 +1491,14 @@ func (d *Device) onDeviceControl(root *gb28181.Root, req *sip.Message, src net.A
 		st := ptz.DragZoom(true, dz.Length, dz.Width, dz.MidPointX, dz.MidPointY, dz.LengthX, dz.LengthY)
 		log.Printf("[gb] DragZoomIn on %s => window(%dx%d) center(%d,%d) box(%dx%d) => target (pan=%.1f° tilt=%.1f° zoom=%.1fx)",
 			channelID, dz.Length, dz.Width, dz.MidPointX, dz.MidPointY, dz.LengthX, dz.LengthY, st.Pan, st.Tilt, st.Zoom)
+		d.recordControlEvent("DeviceControl", channelID, "3D拉框放大", fmt.Sprintf("center=(%d,%d) target=(pan=%.1f° tilt=%.1f° zoom=%.1fx)", dz.MidPointX, dz.MidPointY, st.Pan, st.Tilt, st.Zoom), src.String())
 	} else if ctrl.DragZoomOut != nil {
 		dz := ctrl.DragZoomOut
 		ptz := d.GetChannelPTZ(channelID)
 		st := ptz.DragZoom(false, dz.Length, dz.Width, dz.MidPointX, dz.MidPointY, dz.LengthX, dz.LengthY)
 		log.Printf("[gb] DragZoomOut on %s => window(%dx%d) center(%d,%d) box(%dx%d) => target (pan=%.1f° tilt=%.1f° zoom=%.1fx)",
 			channelID, dz.Length, dz.Width, dz.MidPointX, dz.MidPointY, dz.LengthX, dz.LengthY, st.Pan, st.Tilt, st.Zoom)
+		d.recordControlEvent("DeviceControl", channelID, "3D拉框缩小", fmt.Sprintf("center=(%d,%d) target=(pan=%.1f° tilt=%.1f° zoom=%.1fx)", dz.MidPointX, dz.MidPointY, st.Pan, st.Tilt, st.Zoom), src.String())
 	} else {
 		log.Printf("[gb] DeviceControl CmdType=%s DeviceID=%s", root.CmdType, root.DeviceID)
 	}

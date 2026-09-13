@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/local/gb28181-device/internal/config"
 )
@@ -434,6 +435,72 @@ func (d *Device) ReportGPSNow(channelID ...string) (GPSStatus, error) {
 		return GPSStatus{}, fmt.Errorf("gps manager not initialized")
 	}
 	return d.gpsMgr.ReportNow(channelID...)
+}
+
+// ForceIFrame 触发关键帧注入
+func (d *Device) ForceIFrame(channelID string) bool {
+	channelID = config.NormalizeGBID(channelID)
+	applied := false
+	if d.ms != nil {
+		applied = d.ms.ForceIFrame(channelID)
+	}
+	d.recordControlEvent("Manual", channelID, "手动注入关键帧", fmt.Sprintf("applied=%v", applied), "WebUI")
+	return applied
+}
+
+// TriggerReboot 手动触发模拟远程重启
+func (d *Device) TriggerReboot() {
+	d.recordControlEvent("Manual", d.cfg.Device.ID, "手动重启", "WebUI trigger", "WebUI")
+	go d.triggerSimulatedReboot()
+}
+
+// SetRecordingManual 手动切换录像状态
+func (d *Device) SetRecordingManual(recording bool) {
+	d.SetRecording(recording)
+	d.recordControlEvent("Manual", d.cfg.Device.ID, "手动切换录像", fmt.Sprintf("recording=%v", recording), "WebUI")
+}
+
+// SetTimeManual 手动修改或校正虚拟时钟
+func (d *Device) SetTimeManual(targetTimeStr string) (time.Time, error) {
+	layouts := []string{"2006-01-02 15:04:05", "2006-01-02T15:04:05", "15:04:05"}
+	var targetTime time.Time
+	var err error
+	for _, l := range layouts {
+		if t, e := time.ParseInLocation(l, targetTimeStr, time.Local); e == nil {
+			if l == "15:04:05" {
+				now := time.Now()
+				targetTime = time.Date(now.Year(), now.Month(), now.Day(), t.Hour(), t.Minute(), t.Second(), 0, time.Local)
+			} else {
+				targetTime = t
+			}
+			err = nil
+			break
+		} else {
+			err = e
+		}
+	}
+	if err != nil {
+		return time.Time{}, err
+	}
+	offset := targetTime.Sub(time.Now())
+	d.SetTimeOffset(offset)
+	d.recordControlEvent("Manual", d.cfg.Device.ID, "手动校时", fmt.Sprintf("target=%s offset=%.1fs", targetTime.Format("2006-01-02 15:04:05"), offset.Seconds()), "WebUI")
+	return targetTime, nil
+}
+
+// ResetTimeOffset 复位时钟偏差为系统真实时间
+func (d *Device) ResetTimeOffset() {
+	d.SetTimeOffset(0)
+	d.recordControlEvent("Manual", d.cfg.Device.ID, "时钟复位", "同步为系统本地时间", "WebUI")
+}
+
+// SetHomePosition 设置云台看守位
+func (d *Device) SetHomePosition(channelID string, enabled bool, presetIndex, resetSec int) *PTZStatus {
+	channelID = config.NormalizeGBID(channelID)
+	ptz := d.GetChannelPTZ(channelID)
+	st := ptz.SetHomePosition(enabled, presetIndex, resetSec)
+	d.recordControlEvent("Manual", channelID, "设置守望位", fmt.Sprintf("enabled=%v preset=%d resetTime=%ds", enabled, presetIndex, resetSec), "WebUI")
+	return st
 }
 
 func normalizeVideoPath(p string) string {

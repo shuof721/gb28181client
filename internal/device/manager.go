@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/local/gb28181-device/internal/config"
 	"github.com/local/gb28181-device/internal/storage"
@@ -934,5 +935,72 @@ func (m *Manager) ListSubscriptions(deviceID string) ([]*Subscriber, error) {
 	}
 	return dev.SubscriptionManager().ListAll(), nil
 }
+
+// ForceIFrame 触发指定设备的通道强制输出关键帧
+func (m *Manager) ForceIFrame(deviceID, channelID string) (bool, error) {
+	dev, err := m.GetDevice(deviceID)
+	if err != nil {
+		return false, err
+	}
+	return dev.ForceIFrame(channelID), nil
+}
+
+// TriggerReboot 触发指定设备的远程重启流程
+func (m *Manager) TriggerReboot(deviceID string) error {
+	dev, err := m.GetDevice(deviceID)
+	if err != nil {
+		return err
+	}
+	dev.TriggerReboot()
+	return nil
+}
+
+// SetRecording 手动切换录像状态
+func (m *Manager) SetRecording(deviceID string, recording bool) error {
+	dev, err := m.GetDevice(deviceID)
+	if err != nil {
+		return err
+	}
+	dev.SetRecordingManual(recording)
+	return nil
+}
+
+// SetTime 手动校时/修改虚拟时钟
+func (m *Manager) SetTime(deviceID string, targetTimeStr string) (time.Time, error) {
+	dev, err := m.GetDevice(deviceID)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return dev.SetTimeManual(targetTimeStr)
+}
+
+// ResetTime 复位时钟偏差
+func (m *Manager) ResetTime(deviceID string) error {
+	dev, err := m.GetDevice(deviceID)
+	if err != nil {
+		return err
+	}
+	dev.ResetTimeOffset()
+	return nil
+}
+
+// SetHomePosition 设置云台看守位
+func (m *Manager) SetHomePosition(deviceID, channelID string, enabled bool, presetIndex, resetSec int) (*PTZStatus, error) {
+	dev, err := m.GetDevice(deviceID)
+	if err != nil {
+		return nil, err
+	}
+	return dev.SetHomePosition(channelID, enabled, presetIndex, resetSec), nil
+}
+
+// GetControlEvents 获取最近平台控制与配置下发审计日志
+func (m *Manager) GetControlEvents(deviceID string) ([]ControlEventRecord, error) {
+	dev, err := m.GetDevice(deviceID)
+	if err != nil {
+		return nil, err
+	}
+	return dev.GetControlEvents(), nil
+}
+
 
 

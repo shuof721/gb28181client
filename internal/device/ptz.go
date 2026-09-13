@@ -37,11 +37,15 @@ type PTZStatus struct {
 	TiltSpeed      int                `json:"tiltSpeed"`
 	ZoomSpeed      int                `json:"zoomSpeed"`
 	FocusSpeed     int                `json:"focusSpeed"`
-	IrisSpeed      int                `json:"irisSpeed"`
-	ActivePresetID int                `json:"activePresetId"` // 当前定格的预置位 ID (若在预置位上)
-	ActivePreset   string             `json:"activePreset"`   // 预置位名称
-	StatusDesc     string             `json:"statusDesc"`     // 人类可读状态描述
-	Presets        []config.PTZPreset `json:"presets"`
+	IrisSpeed            int                `json:"irisSpeed"`
+	ActivePresetID       int                `json:"activePresetId"` // 当前定格的预置位 ID (若在预置位上)
+	ActivePreset         string             `json:"activePreset"`   // 预置位名称
+	StatusDesc           string             `json:"statusDesc"`     // 人类可读状态描述
+	Presets              []config.PTZPreset `json:"presets"`
+	HomePositionEnabled  bool               `json:"homePositionEnabled"`  // 是否启用守望位
+	HomePositionPreset   int                `json:"homePositionPreset"`   // 守望位预置位号
+	HomePositionResetSec int                `json:"homePositionResetSec"` // 守望位超时秒数
+	HomeCountdownSec     int                `json:"homeCountdownSec"`     // 归位倒计时秒数
 }
 
 // ChannelPTZ 单个通道的虚拟云台状态机。
@@ -78,8 +82,14 @@ type ChannelPTZ struct {
 	activePresetID int
 	activePresetNm string
 
-	lastUpdate time.Time
-	presets    map[int]config.PTZPreset
+	lastUpdate  time.Time
+	lastCmdTime time.Time
+	presets     map[int]config.PTZPreset
+
+	// 守望位
+	homePositionEnabled  bool
+	homePositionPreset   int
+	homePositionResetSec int
 
 	onPresetChanged func(ch string, ptzCfg *config.PTZConfig)
 }
@@ -97,7 +107,10 @@ func NewChannelPTZ(chID string, initial *config.PTZConfig, onChange func(string,
 		focus:           50.0,
 		iris:            50.0,
 		lastUpdate:      time.Now(),
+		lastCmdTime:     time.Now(),
 		presets:         make(map[int]config.PTZPreset),
+		homePositionPreset:   1,
+		homePositionResetSec: 30,
 		onPresetChanged: onChange,
 	}
 	if p.zoom < 1.0 {
@@ -158,6 +171,15 @@ func (p *ChannelPTZ) updatePositionLocked(now time.Time) {
 	}
 
 	if !p.isMoving {
+		// 守望位空闲归位检测
+		if p.homePositionEnabled && p.homePositionResetSec > 0 && p.homePositionPreset > 0 {
+			if p.activePresetID != p.homePositionPreset {
+				idleSec := now.Sub(p.lastCmdTime).Seconds()
+				if idleSec >= float64(p.homePositionResetSec) {
+					p.gotoPresetLocked(p.homePositionPreset)
+				}
+			}
+		}
 		return
 	}
 
@@ -285,12 +307,46 @@ func (p *ChannelPTZ) matchActivePresetLocked() {
 	}
 }
 
+func (p *ChannelPTZ) gotoPresetLocked(id int) bool {
+	pr, ok := p.presets[id]
+	if !ok {
+		return false
+	}
+	p.isTransitioning = true
+	p.isMoving = true
+	p.targetPan = wrapPan(pr.Pan)
+	p.targetTilt = clampTilt(pr.Tilt)
+	p.targetZoom = clampZoom(pr.Zoom)
+	p.targetPresetID = id
+	p.targetPresetNm = pr.Name
+	return true
+}
+
+// SetHomePosition 配置看守位参数。
+func (p *ChannelPTZ) SetHomePosition(enabled bool, presetIndex int, resetSec int) *PTZStatus {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.homePositionEnabled = enabled
+	if presetIndex > 0 {
+		p.homePositionPreset = presetIndex
+	}
+	if resetSec > 0 {
+		p.homePositionResetSec = resetSec
+	} else if p.homePositionResetSec <= 0 {
+		p.homePositionResetSec = 30
+	}
+	p.lastCmdTime = time.Now()
+	return p.statusLocked()
+}
+
 // ExecuteCommand 执行国标 PTZ 指令。
 func (p *ChannelPTZ) ExecuteCommand(cmd *gb28181.PTZCommand) (*PTZStatus, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	now := time.Now()
+	p.lastCmdTime = now
 	p.updatePositionLocked(now)
 
 	switch cmd.Action {
@@ -342,17 +398,9 @@ func (p *ChannelPTZ) ExecuteCommand(cmd *gb28181.PTZCommand) (*PTZStatus, error)
 
 	case gb28181.PTZActionPresetCall:
 		id := cmd.PresetID
-		pr, ok := p.presets[id]
-		if !ok {
+		if !p.gotoPresetLocked(id) {
 			return nil, fmt.Errorf("preset %d not found", id)
 		}
-		p.isTransitioning = true
-		p.isMoving = true
-		p.targetPan = wrapPan(pr.Pan)
-		p.targetTilt = clampTilt(pr.Tilt)
-		p.targetZoom = clampZoom(pr.Zoom)
-		p.targetPresetID = id
-		p.targetPresetNm = pr.Name
 
 	case gb28181.PTZActionPresetDelete:
 		id := cmd.PresetID
@@ -376,6 +424,7 @@ func (p *ChannelPTZ) ManualControl(action string, panSpeed, tiltSpeed, zoomSpeed
 	defer p.mu.Unlock()
 
 	now := time.Now()
+	p.lastCmdTime = now
 	p.updatePositionLocked(now)
 
 	p.isTransitioning = false
@@ -483,6 +532,7 @@ func (p *ChannelPTZ) SetPose(pan, tilt, zoom float64) *PTZStatus {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	p.lastCmdTime = time.Now()
 	p.isMoving = false
 	p.isTransitioning = false
 	p.panDir = 0
@@ -603,28 +653,48 @@ func (p *ChannelPTZ) statusLocked() *PTZStatus {
 		desc = "静止"
 	}
 
+	countdown := 0
+	if p.homePositionEnabled && p.homePositionResetSec > 0 && p.homePositionPreset > 0 {
+		if !p.isMoving && !p.isTransitioning && p.activePresetID != p.homePositionPreset {
+			idleSec := int(time.Since(p.lastCmdTime).Seconds())
+			left := p.homePositionResetSec - idleSec
+			if left > 0 {
+				countdown = left
+			}
+		}
+		if p.isTransitioning && p.targetPresetID == p.homePositionPreset {
+			desc = fmt.Sprintf("守望位自动归位中: 预置位 #%d (%s)...", p.targetPresetID, p.targetPresetNm)
+		} else if countdown > 0 {
+			desc += fmt.Sprintf(" [守望位 #%d: %d秒后归位]", p.homePositionPreset, countdown)
+		}
+	}
+
 	return &PTZStatus{
-		ChannelID:      p.channelID,
-		Pan:            p.pan,
-		Tilt:           p.tilt,
-		Zoom:           p.zoom,
-		Focus:          p.focus,
-		Iris:           p.iris,
-		IsMoving:       p.isMoving || p.isTransitioning,
-		PanDir:         p.panDir,
-		TiltDir:        p.tiltDir,
-		ZoomDir:        p.zoomDir,
-		FocusDir:       p.focusDir,
-		IrisDir:        p.irisDir,
-		PanSpeed:       p.panSpeed,
-		TiltSpeed:      p.tiltSpeed,
-		ZoomSpeed:      p.zoomSpeed,
-		FocusSpeed:     p.focusSpeed,
-		IrisSpeed:      p.irisSpeed,
-		ActivePresetID: p.activePresetID,
-		ActivePreset:   p.activePresetNm,
-		StatusDesc:     desc,
-		Presets:        prs,
+		ChannelID:            p.channelID,
+		Pan:                  p.pan,
+		Tilt:                 p.tilt,
+		Zoom:                 p.zoom,
+		Focus:                p.focus,
+		Iris:                 p.iris,
+		IsMoving:             p.isMoving || p.isTransitioning,
+		PanDir:               p.panDir,
+		TiltDir:              p.tiltDir,
+		ZoomDir:              p.zoomDir,
+		FocusDir:             p.focusDir,
+		IrisDir:              p.irisDir,
+		PanSpeed:             p.panSpeed,
+		TiltSpeed:            p.tiltSpeed,
+		ZoomSpeed:            p.zoomSpeed,
+		FocusSpeed:           p.focusSpeed,
+		IrisSpeed:            p.irisSpeed,
+		ActivePresetID:       p.activePresetID,
+		ActivePreset:         p.activePresetNm,
+		StatusDesc:           desc,
+		Presets:              prs,
+		HomePositionEnabled:  p.homePositionEnabled,
+		HomePositionPreset:   p.homePositionPreset,
+		HomePositionResetSec: p.homePositionResetSec,
+		HomeCountdownSec:     countdown,
 	}
 }
 
@@ -633,7 +703,9 @@ func (p *ChannelPTZ) DragZoom(isZoomIn bool, length, width, midX, midY, lenX, le
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	p.updatePositionLocked(time.Now())
+	now := time.Now()
+	p.lastCmdTime = now
+	p.updatePositionLocked(now)
 
 	if length <= 0 {
 		length = 1920

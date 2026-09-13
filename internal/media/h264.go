@@ -154,6 +154,28 @@ func (s *FileSource) Seek(offsetSec float64, fps int) (float64, error) {
 	return actualSec, nil
 }
 
+// ForceIFrame 寻找当前播放位置之后的下一个最近 IDR 帧（若无则循环至首个 IDR），并标记下一次 Next() 强制输出 SPS/PPS。
+func (s *FileSource) ForceIFrame() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.idrIndices) > 0 {
+		found := false
+		for _, idx := range s.idrIndices {
+			if idx >= s.pos {
+				s.pos = idx
+				found = true
+				break
+			}
+		}
+		if !found {
+			s.pos = s.idrIndices[0]
+		}
+	} else {
+		s.skipToIDR()
+	}
+	s.forceI = true
+}
+
 func (s *FileSource) Next() ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

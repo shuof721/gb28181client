@@ -255,6 +255,7 @@ type Session struct {
 	scaleMu       sync.RWMutex
 	scale         float64
 	paused        atomic.Bool
+	forceIFrame   atomic.Bool
 	currentOffset atomic.Int64 // 毫秒
 	OnComplete    func(channelID, callID string)
 	onClose       func(s *Session)
@@ -268,6 +269,11 @@ type Session struct {
 	stopCh  chan struct{}
 	stopped atomic.Bool
 	wg      sync.WaitGroup
+}
+
+func (s *Session) ForceIFrame() {
+	s.forceIFrame.Store(true)
+	log.Printf("[media] session %s ch=%s force I-Frame requested", s.CallID, s.ChannelID)
 }
 
 func (s *Session) GetScale() float64 {
@@ -546,6 +552,20 @@ func (m *SessionManager) StopAll() {
 	}
 }
 
+// ForceIFrame 触发指定通道（或所有通道）的活跃推流会话强制输出关键帧
+func (m *SessionManager) ForceIFrame(channelID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	found := false
+	for _, s := range m.sessions {
+		if channelID == "" || s.ChannelID == channelID {
+			s.ForceIFrame()
+			found = true
+		}
+	}
+	return found
+}
+
 func (m *SessionManager) remove(s *Session) {
 	if s == nil {
 		return
@@ -713,6 +733,14 @@ func (s *Session) loop() {
 		if s.paused.Load() {
 			time.Sleep(50 * time.Millisecond)
 			continue
+		}
+
+		if s.forceIFrame.Swap(false) {
+			if fif, ok := s.source.(interface{ ForceIFrame() }); ok {
+				fif.ForceIFrame()
+			}
+			lastFrameTime = time.Time{} // 强制清空等待时间，立即产生帧
+			log.Printf("[media] session %s ch=%s force I-Frame applied to stream source", s.CallID, s.ChannelID)
 		}
 
 		scale := s.GetScale()
