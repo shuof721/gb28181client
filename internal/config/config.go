@@ -209,13 +209,23 @@ type MediaConfig struct {
 	RTPPayloadMax int `yaml:"rtp_payload_max" json:"rtp_payload_max"`
 	// 本地媒体 IP（发送 RTP 的源地址），默认同 sip.local_ip
 	LocalIP string `yaml:"local_ip" json:"local_ip"`
+
+	// 伴音配置（PS 复合流音视频混流）
+	AudioEnabled    bool   `yaml:"audio_enabled" json:"audio_enabled"`
+	AudioCodec      string `yaml:"audio_codec" json:"audio_codec"`             // 默认 "G.711A"
+	AudioSource     string `yaml:"audio_source" json:"audio_source"`           // "beep", "sine", "ambient", "silence", "file"
+	AudioFile       string `yaml:"audio_file" json:"audio_file"`               // 自定义音频文件路径
+	AudioSampleRate int    `yaml:"audio_sample_rate" json:"audio_sample_rate"` // 默认 8000
 }
 
 // ChannelMediaConfig 单个通道的媒体源。
 type ChannelMediaConfig struct {
-	Source   string `yaml:"source" json:"source"` // synthetic | file | mp4，空则继承全局
-	H264File string `yaml:"h264_file" json:"h264_file"`
-	MP4File  string `yaml:"mp4_file" json:"mp4_file"`
+	Source       string `yaml:"source" json:"source"` // synthetic | file | mp4，空则继承全局
+	H264File     string `yaml:"h264_file" json:"h264_file"`
+	MP4File      string `yaml:"mp4_file" json:"mp4_file"`
+	AudioEnabled *bool  `yaml:"audio_enabled,omitempty" json:"audio_enabled,omitempty"` // 通道独立伴音开关
+	AudioSource  string `yaml:"audio_source,omitempty" json:"audio_source,omitempty"`   // 通道独立伴音源
+	AudioFile    string `yaml:"audio_file,omitempty" json:"audio_file,omitempty"`       // 通道独立音频文件
 }
 
 // NormalizeGBID 把 WVP 等平台可能带来的 "通道ID:SSRC" 规范为 20 位国标编号。
@@ -234,12 +244,26 @@ func NormalizeGBID(id string) string {
 func (m *MediaConfig) OptionsFor(channelID string) SourceOptionsView {
 	channelID = NormalizeGBID(channelID)
 	opts := SourceOptionsView{
-		Kind:   m.Source,
-		H264:   m.H264File,
-		MP4:    m.MP4File,
-		Width:  m.Width,
-		Height: m.Height,
-		FPS:    m.FPS,
+		Kind:            m.Source,
+		H264:            m.H264File,
+		MP4:             m.MP4File,
+		Width:           m.Width,
+		Height:          m.Height,
+		FPS:             m.FPS,
+		AudioEnabled:    m.AudioEnabled,
+		AudioCodec:      m.AudioCodec,
+		AudioSource:     m.AudioSource,
+		AudioFile:       m.AudioFile,
+		AudioSampleRate: m.AudioSampleRate,
+	}
+	if opts.AudioCodec == "" {
+		opts.AudioCodec = "G.711A"
+	}
+	if opts.AudioSource == "" {
+		opts.AudioSource = "beep"
+	}
+	if opts.AudioSampleRate <= 0 {
+		opts.AudioSampleRate = 8000
 	}
 	if !strings.EqualFold(m.Mode, "per_channel") {
 		return opts
@@ -257,17 +281,31 @@ func (m *MediaConfig) OptionsFor(channelID string) SourceOptionsView {
 	if ch.MP4File != "" {
 		opts.MP4 = ch.MP4File
 	}
+	if ch.AudioEnabled != nil {
+		opts.AudioEnabled = *ch.AudioEnabled
+	}
+	if ch.AudioSource != "" {
+		opts.AudioSource = ch.AudioSource
+	}
+	if ch.AudioFile != "" {
+		opts.AudioFile = ch.AudioFile
+	}
 	return opts
 }
 
 // SourceOptionsView 供 device 层转成 media.SourceOptions，避免 config 依赖 media。
 type SourceOptionsView struct {
-	Kind   string
-	H264   string
-	MP4    string
-	Width  int
-	Height int
-	FPS    int
+	Kind            string
+	H264            string
+	MP4             string
+	Width           int
+	Height          int
+	FPS             int
+	AudioEnabled    bool
+	AudioCodec      string
+	AudioSource     string
+	AudioFile       string
+	AudioSampleRate int
 }
 
 type LoggingConfig struct {
@@ -325,11 +363,15 @@ func Default() *Config {
 			},
 		},
 		Media: MediaConfig{
-			Source:        "synthetic",
-			Width:         1280,
-			Height:        720,
-			FPS:           25,
-			RTPPayloadMax: 1400,
+			Source:          "synthetic",
+			Width:           1280,
+			Height:          720,
+			FPS:             25,
+			RTPPayloadMax:   1400,
+			AudioEnabled:    true,
+			AudioCodec:      "G.711A",
+			AudioSource:     "beep",
+			AudioSampleRate: 8000,
 		},
 		Record: RecordConfig{
 			Enabled:      true,
@@ -412,6 +454,15 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Media.LocalIP == "" {
 		c.Media.LocalIP = c.SIP.LocalIP
+	}
+	if c.Media.AudioCodec == "" {
+		c.Media.AudioCodec = "G.711A"
+	}
+	if c.Media.AudioSource == "" {
+		c.Media.AudioSource = "beep"
+	}
+	if c.Media.AudioSampleRate <= 0 {
+		c.Media.AudioSampleRate = 8000
 	}
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"

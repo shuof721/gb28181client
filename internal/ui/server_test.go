@@ -11,6 +11,7 @@ import (
 
 	"github.com/local/gb28181-device/internal/config"
 	"github.com/local/gb28181-device/internal/device"
+	"github.com/local/gb28181-device/internal/media"
 	"github.com/local/gb28181-device/internal/storage"
 )
 
@@ -247,4 +248,121 @@ func TestServerDevicePTZAPI(t *testing.T) {
 		t.Fatalf("unexpected coords after reset: %+v", resetStatus)
 	}
 }
+
+func TestServerChannelAudioAPI(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "gb-ui-audio-test-*")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	store := storage.New(tempDir)
+	profile := config.DeviceProfile{
+		Enabled: false,
+		SIP: config.SIPConfig{
+			ServerIP: "127.0.0.1", ServerPort: 5060,
+			LocalIP: "127.0.0.1", LocalPort: 5074,
+			Transport: "udp", Password: "pass",
+		},
+		Device: config.DeviceConfig{
+			ID: "34020000001180000001", Name: "NVR-Audio",
+			Channels: []config.ChannelConfig{
+				{ID: "34020000001320000001", Name: "IPC-1"},
+				{ID: "34020000001320000002", Name: "IPC-2"},
+			},
+		},
+		Media: config.MediaConfig{
+			Source: "synthetic",
+		},
+	}
+	if err := store.Save(&profile); err != nil {
+		t.Fatalf("Save profile error: %v", err)
+	}
+
+	mgr := device.NewManager(store)
+	if err := mgr.Init(); err != nil {
+		t.Fatalf("mgr init: %v", err)
+	}
+	srv := New(mgr)
+
+	// 1. 设置伴音为开启 + 切换为 sine
+	enable := true
+	body := `{"channelId":"34020000001320000001","audioEnabled":true,"audioSource":"sine"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/devices/34020000001180000001/channels/audio", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on channel audio set, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 检查持久化配置
+	loaded, err := store.Get("34020000001180000001")
+	if err != nil {
+		t.Fatalf("get profile failed: %v", err)
+	}
+	chCfg := loaded.Media.Channels["34020000001320000001"]
+	if chCfg.AudioEnabled == nil || *chCfg.AudioEnabled != enable {
+		t.Errorf("expected AudioEnabled=true, got %v", chCfg.AudioEnabled)
+	}
+	if chCfg.AudioSource != "sine" {
+		t.Errorf("expected AudioSource=sine, got %s", chCfg.AudioSource)
+	}
+
+	// 2. 停用伴音
+	disableBody := `{"channelId":"34020000001320000001","audioEnabled":false}`
+	req2 := httptest.NewRequest(http.MethodPost, "/api/devices/34020000001180000001/channels/audio", strings.NewReader(disableBody))
+	rec2 := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("expected 200 on channel audio disable, got %d: %s", rec2.Code, rec2.Body.String())
+	}
+
+	loaded2, _ := store.Get("34020000001180000001")
+	chCfg2 := loaded2.Media.Channels["34020000001320000001"]
+	if chCfg2.AudioEnabled == nil || *chCfg2.AudioEnabled != false {
+		t.Errorf("expected AudioEnabled=false, got %v", chCfg2.AudioEnabled)
+	}
+
+	// 3. 测试活跃推流中的热切换与无死锁验证
+	_ = mgr.Start("34020000001180000001")
+	dev, err := mgr.GetDevice("34020000001180000001")
+	if err != nil {
+		t.Fatalf("get device failed: %v", err)
+	}
+	sdp1 := &media.SDPInfo{IP: "127.0.0.1", VideoPort: 45000, SSRC: "0200001111"}
+	_, err = dev.MediaManager().StartLive("34020000001320000001", "live-call-1", sdp1)
+	if err != nil {
+		t.Fatalf("start live session 1 failed: %v", err)
+	}
+	defer dev.MediaManager().StopAll()
+
+	// 在推流活跃期间切换伴音为 beep
+	beepBody := `{"channelId":"34020000001320000001","audioEnabled":true,"audioSource":"beep"}`
+	req3 := httptest.NewRequest(http.MethodPost, "/api/devices/34020000001180000001/channels/audio", strings.NewReader(beepBody))
+	rec3 := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec3, req3)
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("expected 200 on hot-swap to beep, got %d: %s", rec3.Code, rec3.Body.String())
+	}
+
+	// 验证通道 1 会话依然存活且音源已热替换为 beep
+	sessList := dev.MediaManager().ListSessions()
+	if len(sessList) != 1 {
+		t.Fatalf("expected 1 active session after hot-swap, got %d", len(sessList))
+	}
+	if sessList[0].AudioSource != "beep" {
+		t.Errorf("expected hot-swapped audio source beep, got %s", sessList[0].AudioSource)
+	}
+
+	// 验证通道 2 发起点播不会被锁阻塞
+	sdp2 := &media.SDPInfo{IP: "127.0.0.1", VideoPort: 45002, SSRC: "0200002222"}
+	ans2, err := dev.MediaManager().StartLive("34020000001320000002", "live-call-2", sdp2)
+	if err != nil || ans2 == "" {
+		t.Fatalf("start live session 2 failed: %v", err)
+	}
+	if len(dev.MediaManager().ListSessions()) != 2 {
+		t.Fatalf("expected 2 active sessions, got %d", len(dev.MediaManager().ListSessions()))
+	}
+}
+
 

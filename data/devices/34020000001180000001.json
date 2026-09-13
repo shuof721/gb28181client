@@ -121,21 +121,30 @@
     "mp4_file": "assets/1.mp4",
     "channels": {
       "34020000001320000001": {
-        "source": "ptz",
+        "source": "mp4",
         "h264_file": "",
-        "mp4_file": ""
+        "mp4_file": "assets/@赖哇塞 人这一辈子拿眼泪当阿拉丁神灯的次数是有限的 1080P.mp4",
+        "audio_enabled": true,
+        "audio_source": "mp4"
       },
       "34020000001320000002": {
         "source": "mp4",
         "h264_file": "",
-        "mp4_file": "assets/2.mp4"
+        "mp4_file": "assets/2.mp4",
+        "audio_enabled": true,
+        "audio_source": "mp4"
       }
     },
     "width": 1280,
     "height": 720,
     "fps": 25,
     "rtp_payload_max": 1400,
-    "local_ip": "192.168.42.198"
+    "local_ip": "192.168.42.198",
+    "audio_enabled": true,
+    "audio_codec": "G.711A",
+    "audio_source": "mp4",
+    "audio_file": "",
+    "audio_sample_rate": 8000
   },
   "record": {
     "enabled": true,

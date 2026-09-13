@@ -139,11 +139,11 @@ func (s *Server) handleDeviceDispatch(w http.ResponseWriter, r *http.Request) {
 		}
 	case "guard":
 		s.handleDeviceGuard(w, r, id)
-	case "session":
+	case "session", "sessions":
 		if len(parts) >= 3 && parts[2] == "stop" {
 			s.handleDeviceStopSession(w, r, id)
 		} else {
-			writeErr(w, 404, "Not found")
+			s.handleDeviceSessions(w, r, id)
 		}
 	case "talk":
 		if len(parts) >= 3 {
@@ -173,6 +173,8 @@ func (s *Server) handleDeviceDispatch(w http.ResponseWriter, r *http.Request) {
 				s.handleChannelRemove(w, r, id)
 			case "bind":
 				s.handleChannelBind(w, r, id)
+			case "audio":
+				s.handleChannelAudio(w, r, id)
 			case "status":
 				s.handleChannelStatus(w, r, id)
 			default:
@@ -692,6 +694,20 @@ func (s *Server) handleDeviceStopSession(w http.ResponseWriter, r *http.Request,
 	writeJSON(w, 200, map[string]string{"ok": "stopped"})
 }
 
+func (s *Server) handleDeviceSessions(w http.ResponseWriter, r *http.Request, id string) {
+	dev, err := s.mgr.GetDevice(id)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	mm := dev.MediaManager()
+	if mm == nil {
+		writeJSON(w, 200, map[string]any{"sessions": []any{}})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"sessions": mm.ListSessions()})
+}
+
 func (s *Server) handleDeviceTalkSessions(w http.ResponseWriter, r *http.Request, id string) {
 	dev, err := s.mgr.GetDevice(id)
 	if err != nil {
@@ -1180,6 +1196,34 @@ func (s *Server) handleChannelBind(w http.ResponseWriter, r *http.Request, id st
 		return
 	}
 	writeJSON(w, 200, map[string]string{"ok": "bound"})
+}
+
+func (s *Server) handleChannelAudio(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	var req struct {
+		ChannelID    string `json:"channelId"`
+		AudioEnabled *bool  `json:"audioEnabled"`
+		AudioSource  string `json:"audioSource"`
+		AudioFile    string `json:"audioFile"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	bindReq := device.BindChannelRequest{
+		ChannelID:    req.ChannelID,
+		AudioEnabled: req.AudioEnabled,
+		AudioSource:  req.AudioSource,
+		AudioFile:    req.AudioFile,
+	}
+	if err := s.mgr.BindChannelVideo(id, bindReq); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "channelId": req.ChannelID})
 }
 
 func (s *Server) handleMediaMode(w http.ResponseWriter, r *http.Request, id string) {

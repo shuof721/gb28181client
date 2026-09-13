@@ -152,16 +152,16 @@ media:
 - Digest：MD5 / MD5-sess / SHA-256，支持 qop=auth
 - MANSCDP：Catalog、DeviceInfo、DeviceStatus、DeviceControl、PresetQuery、RecordInfo、Keepalive、Alarm
 - 实时点播与回放：解析 `c=`/`m=`/`y=`，回 `sendonly` SDP（含 `y=` SSRC），支持 MANSRTSP 拖动/倍速与结束通知 (121)
+- PS 复合流推流：支持音视频复合流 (H.264 + G.711A)，System Header 动态声明 `audio_bound`，PSM 注册视频 (0x1B) 与音频 (0x90) 双轨并计算 MPEG-2 CRC32，支持蜂鸣/正弦/环境底噪/静音等音源与 Web 实时跳动 VU 电平表
 - 虚拟云台与预置位：PTZ 8方向/变倍平滑运动仿真，支持 PresetQuery、Set(0x81)、Call(0x82)、Delete(0x83) 与 Web 可视化操控
-- PS：Pack Header + System Header + PSM(stream_type=0x1B) + PES(0xE0)
 - RTP：PT=96，SSRC 使用平台 `y=` 中的值
 
 ## 尚未覆盖 / 后续可做
 
-- 移动位置订阅与轨迹模拟 (MobilePosition 上报 / GPS)
-- 语音对讲（Talk）、PS 复合流音频封装 (G.711A/AAC)
-- 目录订阅与通道增量通知 (Catalog Subscribe → Notify)
-- TCP 媒体的 `0x24` interleaved 模式（当前为 2 字节长度前缀）
+- 云台巡航组 (Cruise / Patrol) 与自动线扫 (Auto Scan) 状态机推进
+- 历史录像文件下载 (s=Download) 与极速/倍速推流
+- H.265 (HEVC, stream_type=0x24) 视频编码推流支持
+- TCP 媒体的 `0x24` interleaved 模式（当前为 RFC 4571 2 字节长度前缀）
 - 更严格的 SIP 事务层（重传定时器、CANCEL 等）
 
 ## 测试

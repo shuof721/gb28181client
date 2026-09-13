@@ -619,15 +619,37 @@ func (m *Manager) BindChannelVideo(deviceID string, req BindChannelRequest) erro
 		md.Profile.Media.Channels = map[string]config.ChannelMediaConfig{}
 	}
 	source := strings.ToLower(strings.TrimSpace(req.Source))
-	if source == "" {
-		source = "mp4"
+	if source != "" {
+		switch source {
+		case "mp4", "file", "synthetic", "ptz":
+		default:
+			return fmt.Errorf("source 必须是 mp4/file/synthetic/ptz")
+		}
 	}
-	cfg := config.ChannelMediaConfig{Source: source}
+	cfg := md.Profile.Media.Channels[chID]
+	if source != "" {
+		cfg.Source = source
+	}
 	if mp4 := normalizeVideoPath(req.MP4); mp4 != "" {
 		cfg.MP4File = mp4
+		if cfg.Source == "" {
+			cfg.Source = "mp4"
+		}
 	}
 	if h := normalizeVideoPath(req.H264); h != "" {
 		cfg.H264File = h
+		if cfg.Source == "" {
+			cfg.Source = "file"
+		}
+	}
+	if req.AudioEnabled != nil {
+		cfg.AudioEnabled = req.AudioEnabled
+	}
+	if req.AudioSource != "" {
+		cfg.AudioSource = req.AudioSource
+	}
+	if req.AudioFile != "" {
+		cfg.AudioFile = req.AudioFile
 	}
 	md.Profile.Media.Channels[chID] = cfg
 	md.Profile.Media.Mode = "per_channel"

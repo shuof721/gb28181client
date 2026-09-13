@@ -1827,6 +1827,12 @@ function renderChannels(channels, mediaCfg, sessions){
     return;
   }
 
+  // 若用户当前正打开/聚焦通道卡片中的下拉框或输入框，跳过本次定时刷新重绘，避免打断操作或重置选项
+  const activeEl = document.activeElement;
+  if(activeEl && (activeEl.tagName === 'SELECT' || activeEl.tagName === 'INPUT') && container.contains(activeEl)){
+    return;
+  }
+
   const liveChannelMap = {};
   (sessions||[]).forEach(function(s){ liveChannelMap[s.channelId] = s; });
 
@@ -1855,15 +1861,32 @@ function renderChannels(channels, mediaCfg, sessions){
       dutyBadge = '<span class="badge off"><span class="dot"></span>🔓 已撤防</span>';
     }
 
+    const audioEnabled = (chMedia.audio_enabled !== undefined) ? chMedia.audio_enabled : ((mediaCfg && mediaCfg.audio_enabled !== undefined) ? mediaCfg.audio_enabled : true);
+    const audioSrc = chMedia.audio_source || (mediaCfg && mediaCfg.audio_source) || 'mp4';
+    let audioSrcLabel = 'MP4原声';
+    if(audioSrc === 'beep') audioSrcLabel = '安防蜂鸣';
+    else if(audioSrc === 'sine') audioSrcLabel = '正弦波(1kHz)';
+    else if(audioSrc === 'ambient' || audioSrc === 'noise') audioSrcLabel = '环境底噪';
+    else if(audioSrc === 'silence') audioSrcLabel = '静音轨';
+    else if(audioSrc === 'file') audioSrcLabel = '本地音频';
+
+    let audioBadge = '';
+    if(audioEnabled){
+      audioBadge = '<span class="badge" style="background:#059669;color:#fff"><span class="dot"></span>🔊 伴音: ' + esc(audioSrcLabel) + '</span>';
+    } else {
+      audioBadge = '<span class="badge off"><span class="dot"></span>🔇 纯视频</span>';
+    }
+
     return '<div class="ch-card ' + (isLive ? 'live' : '') + '">' +
       '<div class="ch-header">' +
         '<div>' +
           '<div class="ch-name">' + esc(ch.name) + '</div>' +
           '<div class="ch-id">' + esc(ch.id) + '</div>' +
         '</div>' +
-        '<div style="display:flex;gap:4px;align-items:center">' +
+        '<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">' +
           (isLive ? '<span class="badge live"><span class="dot"></span>推流中</span>' : '') +
           dutyBadge +
+          audioBadge +
           (ch.status === 'ON' ? '<span class="badge on"><span class="dot"></span>在线</span>' : '<span class="badge off"><span class="dot"></span>离线</span>') +
         '</div>' +
       '</div>' +
@@ -1881,7 +1904,7 @@ function renderChannels(channels, mediaCfg, sessions){
             return '<option value="' + esc(v.path) + '" ' + sel + '>' + esc(v.name) + '</option>';
           }).join('') +
         '</select>' +
-        '<button class="btn btn-sm btn-primary" onclick="bindChannelMedia(\'' + esc(ch.id) + '\', this)">绑定</button>' +
+        '<button class="btn btn-sm btn-primary" onclick="bindChannelMedia(\'' + esc(ch.id) + '\', this)">绑定视频</button>' +
         '<button class="btn btn-sm" onclick="openPTZModal(\'' + esc(ch.id) + '\',\'' + esc(ch.name) + '\')">🕹️ 云台与预置位</button>' +
         (ch.dutyStatus === 'ALARM' || ch.isAlarming ?
           '<button class="btn btn-sm btn-danger" onclick="setChannelGuardState(\'' + esc(ch.id) + '\',\'ResetAlarm\')">🔕 复位报警</button>' : ''
@@ -1894,28 +1917,145 @@ function renderChannels(channels, mediaCfg, sessions){
         '<button class="btn btn-sm" onclick="quickCatalogNotify(\'' + esc(ch.id) + '\')">📢 增量通知</button>' +
         '<button class="btn btn-sm btn-danger" onclick="removeChannel(\'' + esc(ch.id) + '\')">删除</button>' +
       '</div>' +
+      '<div style="display:flex;gap:6px;align-items:center;margin-top:6px;padding:6px 8px;background:rgba(255,255,255,0.03);border:1px dashed var(--border);border-radius:var(--radius-sm);flex-wrap:wrap">' +
+        '<span style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:4px">🔊 复合伴音:</span>' +
+        '<select class="channel-audio-select" onchange="applyChannelAudioSource(\'' + esc(ch.id) + '\', this)" style="padding:2px 6px;border-radius:var(--radius-sm);background:var(--surface-3);color:var(--text-main);border:1px solid var(--border);font-size:11px">' +
+          '<option value="mp4" ' + (audioSrc==='mp4'||!audioSrc?'selected':'') + '>🎬 跟随 MP4 原始声音 (如有)</option>' +
+          '<option value="beep" ' + (audioSrc==='beep'?'selected':'') + '>🔊 安防蜂鸣提示音 (1000/1400Hz)</option>' +
+          '<option value="sine" ' + (audioSrc==='sine'?'selected':'') + '>🎵 1000Hz 纯正弦波测试音</option>' +
+          '<option value="ambient" ' + (audioSrc==='ambient'?'selected':'') + '>🍃 摄像头真实环境底噪 (逼真自然)</option>' +
+          '<option value="silence" ' + (audioSrc==='silence'?'selected':'') + '>🔇 静音帧 (G.711A 0xD5 满足检测)</option>' +
+        '</select>' +
+        '<button class="btn btn-sm ' + (audioEnabled?'':'btn-primary') + '" onclick="toggleChannelAudio(\'' + esc(ch.id) + '\', ' + (!audioEnabled) + ', this)">' + (audioEnabled?'🔇 停用伴音':'🔊 开启伴音') + '</button>' +
+        '<button class="btn btn-sm" onclick="applyChannelAudioSource(\'' + esc(ch.id) + '\', this)">应用音源</button>' +
+      '</div>' +
     '</div>';
   }).join('');
+}
+
+let sessFastPollTimer = null;
+
+function updateLiveSessionsVU(sessions){
+  if(!sessions) return;
+  sessions.forEach(function(s){
+    const safeId = (s.callId || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+    if(s.audioEnabled){
+      applyVULevel('sessVUBar_' + safeId, 'sessVUTxt_' + safeId, s.audioLevel || 0);
+    }
+  });
 }
 
 // Render Sessions for active device
 function renderSessions(sessions){
   const container = document.getElementById('sessionListContainer');
   if(!sessions || !sessions.length){
+    if(sessFastPollTimer){
+      clearInterval(sessFastPollTimer);
+      sessFastPollTimer = null;
+    }
     container.innerHTML = '<div style="color:var(--text-dim);padding:24px;text-align:center">当前无实时推流会话。在平台（如 WVP）上点击通道播放后，将在此展示推流状态。</div>';
     return;
   }
+
+  // 启动 300ms 高频轻量轮询，使推流伴音电平表如对讲般敏锐跳动
+  if(!sessFastPollTimer){
+    sessFastPollTimer = setInterval(function(){
+      if(activeDeviceId){
+        api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/sessions').then(function(res){
+          if(res && res.sessions && res.sessions.length > 0){
+            updateLiveSessionsVU(res.sessions);
+          } else if(res && res.sessions && res.sessions.length === 0){
+            renderSessions([]);
+          }
+        });
+      }
+    }, 300);
+  }
+
+  // 检查是否已有相同会话卡片结构，若已存在则直接增量平滑刷新 VU，避免整个 DOM 被重建闪烁
+  const existingItems = container.querySelectorAll('.session-item[data-call-id]');
+  if(existingItems.length === sessions.length){
+    let allMatch = true;
+    for(let i=0; i<sessions.length; i++){
+      if(existingItems[i].getAttribute('data-call-id') !== sessions[i].callId){
+        allMatch = false;
+        break;
+      }
+    }
+    if(allMatch){
+      updateLiveSessionsVU(sessions);
+      return;
+    }
+  }
+
   container.innerHTML = sessions.map(function(s){
-    return '<div class="session-item">' +
-      '<div>' +
+    const safeId = (s.callId || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+    let audioHtml = '';
+    if(s.audioEnabled){
+      const lvl = Math.round(s.audioLevel || 0);
+      audioHtml = '<div style="margin-top:6px;padding:4px 8px;background:rgba(5,150,105,0.12);border:1px solid rgba(5,150,105,0.3);border-radius:4px;display:flex;align-items:center;gap:8px">' +
+        '<span style="font-size:11px;font-weight:700;color:#34d399">🔊 复合音频 (' + esc(s.audioCodec||'G.711A') + ' 8kHz · ' + esc(s.audioSource||'beep') + '):</span>' +
+        '<div style="flex:1;height:8px;background:rgba(0,0,0,0.5);border-radius:4px;overflow:hidden;position:relative">' +
+          '<div id="sessVUBar_' + safeId + '" style="width:' + lvl + '%;height:100%;background:linear-gradient(90deg,#10b981,#34d399);border-radius:4px;transition:width 0.12s ease-out"></div>' +
+        '</div>' +
+        '<span id="sessVUTxt_' + safeId + '" style="font-size:10px;font-family:var(--font-mono);color:#34d399;min-width:32px;text-align:right">' + lvl + '%</span>' +
+      '</div>';
+    } else {
+      audioHtml = '<div style="margin-top:4px;font-size:11px;color:var(--text-dim)">🔇 纯视频推流 (未启用伴音)</div>';
+    }
+
+    return '<div class="session-item" data-call-id="' + esc(s.callId) + '">' +
+      '<div style="flex:1">' +
         '<div style="font-weight:700;color:#fff;font-size:13px">' + esc(s.channelId) + ' · <span class="badge live"><span class="dot"></span>' + esc(s.streamType||'live') + '</span></div>' +
         '<div style="font-size:11px;font-family:var(--font-mono);color:var(--text-dim);margin-top:4px">' +
           'SSRC: ' + esc(s.ssrc) + ' · 目标: ' + esc(s.remoteIp) + ':' + esc(s.remotePort) + ' (' + (s.isTcp?'TCP':'UDP') + ') · FPS: ' + (s.fps||25) +
         '</div>' +
+        audioHtml +
       '</div>' +
       '<button class="btn btn-sm btn-danger" onclick="stopSession(\'' + esc(s.callId) + '\')">停止推流</button>' +
     '</div>';
   }).join('');
+
+  updateLiveSessionsVU(sessions);
+}
+
+async function toggleChannelAudio(channelId, enable, btn){
+  if(!activeDeviceId) return;
+  const card = btn ? btn.closest('.ch-card') : null;
+  const sel = card ? card.querySelector('.channel-audio-select') : null;
+  const src = sel ? sel.value : 'mp4';
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/channels/audio', 'POST', {
+    channelId: channelId,
+    audioEnabled: enable,
+    audioSource: src
+  });
+  if(j && j.ok){
+    showToast('通道伴音已' + (enable ? '启用 (复合流推流中即时生效)' : '停用 (降级为纯视频)'), 'success');
+    if(document.activeElement) document.activeElement.blur();
+    refreshAll();
+  }
+}
+
+async function applyChannelAudioSource(channelId, btnOrSel){
+  if(!activeDeviceId) return;
+  const card = btnOrSel ? btnOrSel.closest('.ch-card') : null;
+  const sel = card ? card.querySelector('.channel-audio-select') : null;
+  const src = sel ? sel.value : 'mp4';
+  const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/channels/audio', 'POST', {
+    channelId: channelId,
+    audioEnabled: true,
+    audioSource: src
+  });
+  if(j && j.ok){
+    let label = '🎬 MP4原声';
+    if(src === 'beep') label = '🔊 安防蜂鸣';
+    else if(src === 'sine') label = '🎵 1000Hz正弦波';
+    else if(src === 'ambient') label = '🍃 环境底噪';
+    else if(src === 'silence') label = '🔇 静音帧';
+    showToast('伴音音源已即时生效为: ' + label, 'success');
+    if(document.activeElement) document.activeElement.blur();
+    refreshAll();
+  }
 }
 
 // Voice Intercom / Broadcast State & Functions
@@ -2028,8 +2168,9 @@ function renderTalkSessions(talkSessions){
     talkFastPollTimer = setInterval(function(){
       if(activeDeviceId){
         api('/api/devices/' + encodeURIComponent(activeDeviceId)).then(function(dev){
-          if(dev && dev.state && dev.state.talkSessions){
-            renderTalkSessions(dev.state.talkSessions);
+          const ts = (dev && dev.status && dev.status.talkSessions) || (dev && dev.state && dev.state.talkSessions);
+          if(ts){
+            renderTalkSessions(ts);
           }
         });
       }
@@ -2784,9 +2925,9 @@ async function bindChannelMedia(chId, btn){
   let body;
   if(val === '__ptz__') body = {channelId: chId, source: 'ptz'};
   else if(val === '__synthetic__') body = {channelId: chId, source: 'synthetic'};
-  else if(!val) body = {channelId: chId, source: 'mp4', mp4: ''};
+  else if(!val) body = {channelId: chId, source: 'mp4', mp4: '', audioEnabled: true, audioSource: 'mp4'};
   else if(val.endsWith('.h264') || val.endsWith('.264')) body = {channelId: chId, source: 'file', h264: val};
-  else body = {channelId: chId, source: 'mp4', mp4: val};
+  else body = {channelId: chId, source: 'mp4', mp4: val, audioEnabled: true, audioSource: 'mp4'};
 
   const j = await api('/api/devices/' + encodeURIComponent(activeDeviceId) + '/channels/bind', 'POST', body);
   if(j && j.ok){

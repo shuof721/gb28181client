@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -115,6 +116,9 @@ func New(cfg *config.Config) *Device {
 		})
 	}
 	d.ms = media.NewSessionManager(cfg.Media.LocalIP, cfg.Media.FPS, cfg.Media.RTPPayloadMax, srcFactory)
+	d.ms.SetAudioSourceFactory(func(channelID string) (media.AudioSource, string, string, error) {
+		return d.CreateAudioSourceForChannel(channelID)
+	})
 	d.ms.OnComplete = func(ch, callID string) {
 		_ = d.SendMediaStatusNotify(ch, "121")
 	}
@@ -279,6 +283,43 @@ func (d *Device) triggerSimulatedReboot() {
 	log.Printf("[device] %s simulated reboot completed", d.cfg.Device.ID)
 }
 
+func (d *Device) CreateAudioSourceForChannel(channelID string) (media.AudioSource, string, string, error) {
+	d.cfgRLock()
+	opts := d.cfg.Media.OptionsFor(channelID)
+	d.cfgRUnlock()
+	if !opts.AudioEnabled {
+		log.Printf("[media] channel %s audio disabled (audioEnabled=false)", channelID)
+		return nil, opts.AudioCodec, opts.AudioSource, nil
+	}
+	audioKind := strings.ToLower(strings.TrimSpace(opts.AudioSource))
+	audioFile := opts.AudioFile
+
+	// 当通道绑定的是 MP4 视频，且音源为默认/mp4/auto 时，优先使用该 MP4 提取出的原声音频流
+	if (audioKind == "" || audioKind == "mp4" || audioKind == "auto") && opts.Kind == "mp4" && opts.MP4 != "" {
+		if cache, err := media.EnsureMP4Audio(opts.MP4); err == nil && cache != "" {
+			if st, err := os.Stat(cache); err == nil && st.Size() > 0 {
+				audioKind = "file"
+				audioFile = cache
+				log.Printf("[media] channel %s using MP4 original audio from %s (%d bytes)", channelID, cache, st.Size())
+			}
+		} else if err != nil {
+			log.Printf("[media] channel %s failed to extract MP4 audio: %v, fallback to ambient", channelID, err)
+			audioKind = "ambient"
+		}
+	}
+
+	log.Printf("[media] channel %s creating audio source: kind=%s file=%s codec=%s sr=%d",
+		channelID, audioKind, audioFile, opts.AudioCodec, opts.AudioSampleRate)
+
+	src, err := media.NewAudioSource(media.AudioSourceOptions{
+		Kind:       audioKind,
+		FilePath:   audioFile,
+		SampleRate: opts.AudioSampleRate,
+		Codec:      opts.AudioCodec,
+	})
+	return src, opts.AudioCodec, audioKind, err
+}
+
 func (d *Device) Status() Status {
 	sess := d.ms.ListSessions()
 	sessions := make([]any, 0, len(sess))
@@ -299,15 +340,18 @@ func (d *Device) Status() Status {
 			isAlm = d.alarmMgr.IsAlarming(ch.ID)
 		}
 		chs = append(chs, ChannelStatus{
-			ID:          ch.ID,
-			Name:        ch.Name,
-			Status:      ch.Status,
-			GuardStatus: gSt,
-			DutyStatus:  dSt,
-			IsAlarming:  isAlm,
-			MP4:         v.MP4,
-			Source:      v.Kind,
-			H264:        v.H264,
+			ID:           ch.ID,
+			Name:         ch.Name,
+			Status:       ch.Status,
+			GuardStatus:  gSt,
+			DutyStatus:   dSt,
+			IsAlarming:   isAlm,
+			MP4:          v.MP4,
+			Source:       v.Kind,
+			H264:         v.H264,
+			AudioEnabled: v.AudioEnabled,
+			AudioSource:  v.AudioSource,
+			AudioCodec:   v.AudioCodec,
 		})
 	}
 	mode := d.cfg.Media.Mode
@@ -391,6 +435,10 @@ func (d *Device) StopSession(callID string) {
 
 func (d *Device) TalkManager() *media.TalkManager {
 	return d.tm
+}
+
+func (d *Device) MediaManager() *media.SessionManager {
+	return d.ms
 }
 
 // GetChannelPTZ 获取或初始化指定通道的虚拟云台控制器。

@@ -69,13 +69,16 @@ type Status struct {
 }
 
 type ChannelStatus struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Status      string `json:"status"`
-	GuardStatus string `json:"guardStatus,omitempty"` // 该通道布防状态 SetGuard | ResetGuard
-	DutyStatus  string `json:"dutyStatus,omitempty"`  // 国标防区状态 ONDUTY | OFFDUTY | ALARM
-	IsAlarming  bool   `json:"isAlarming"`            // 是否处于报警激活中
-	MP4         string `json:"mp4"`
-	H264        string `json:"h264"`
-	Source      string `json:"source"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Status       string `json:"status"`
+	GuardStatus  string `json:"guardStatus,omitempty"` // 该通道布防状态 SetGuard | ResetGuard
+	DutyStatus   string `json:"dutyStatus,omitempty"`  // 国标防区状态 ONDUTY | OFFDUTY | ALARM
+	IsAlarming   bool   `json:"isAlarming"`            // 是否处于报警激活中
+	MP4          string `json:"mp4"`
+	H264         string `json:"h264"`
+	Source       string `json:"source"`
+	AudioEnabled bool   `json:"audioEnabled"`
+	AudioSource  string `json:"audioSource,omitempty"`
+	AudioCodec   string `json:"audioCodec,omitempty"`
 }

@@ -5,31 +5,33 @@ import "encoding/binary"
 // GB28181 视频：H.264 AU → PES → PS → RTP(PT=96)
 // 结构与常见国标设备/ ZLMediaKit 兼容。
 
-// PackVideoPES 将一帧 H.264（Annex-B AU）打成完整 PS 包。
+// PackVideoPES 将一帧 H.264（Annex-B AU）打成纯视频 PS 包。
 // ts 为 90kHz。
 func PackVideoPES(es []byte, ts uint64) []byte {
-	// Pack(14) + System(18) + PSM(~26) + PES(14+es)
-	out := make([]byte, 0, 64+32+len(es))
+	return PackCompoundPES(es, nil, ts)
+}
+
+// PackCompoundPES 将一帧视频和一帧音频打成 PS 复合流包。
+// 若 audioES 为空，则生成符合国标规范的单视频 PS 包。
+// ts 为 90kHz 时钟基准。
+func PackCompoundPES(videoES []byte, audioES []byte, ts uint64) []byte {
+	hasAudio := len(audioES) > 0
+	totalCap := 64 + len(videoES) + len(audioES)
+	out := make([]byte, 0, totalCap)
 	out = append(out, buildPackHeader(ts)...)
-	out = append(out, buildSystemHeader()...)
-	out = append(out, buildPSM()...)
-	out = append(out, buildPES(0xE0, es, ts)...)
+	out = append(out, buildSystemHeader(hasAudio)...)
+	out = append(out, buildPSM(hasAudio)...)
+	if hasAudio {
+		// 音频 PES 置于视频 PES 之前：音频帧长明确（320字节），不会因视频 I 帧超出 64KB 触发 pesLen=0 而被解析器吞噬
+		out = append(out, buildPES(0xC0, audioES, ts)...)
+	}
+	out = append(out, buildPES(0xE0, videoES, ts)...)
 	return out
 }
 
 func buildPackHeader(scr uint64) []byte {
 	// 00 00 01 BA
 	// '01' SCR[32..30] 1 SCR[29..15] 1 SCR[14..0] 1 SCR_ext[8..0] 1
-	b0 := byte(0x44) | byte((scr>>30)&0x07)<<3 | byte((scr>>28)&0x03)
-	// 重新按标准位拼（48bit）
-	// bit7-6: 01
-	// bit5-3: SCR32-30
-	// bit2:   marker
-	// bit1-0: SCR29-28
-	b0 = 0x40 | byte((scr>>30)&0x07)<<3 | 0x04 | byte((scr>>28)&0x03)
-	b1 := byte((scr >> 20) & 0xFF)
-	// 实际 SCR29-15 是连续 15bit，跨 b0 低 2bit + b1 8bit + b2 高 5bit
-	// 用位缓冲更稳：
 	var bits uint64
 	bits |= 0x2 << 46
 	bits |= ((scr >> 30) & 0x7) << 43
@@ -53,41 +55,77 @@ func buildPackHeader(scr uint64) []byte {
 	hdr[10], hdr[11], hdr[12] = 0x00, 0x04, 0x00
 	// reserved 5bit=11111, pack_stuffing_length=0
 	hdr[13] = 0xF8
-	_ = b0
-	_ = b1
 	return hdr
 }
 
-func buildSystemHeader() []byte {
-	// ISO 13818-1 system header，length=6，仅 rate/video bound
+func buildSystemHeader(hasAudio bool) []byte {
+	// ISO 13818-1 system header，length=6
+	// audio_bound: 6 bit, fixed: 1 bit, CSPS: 1 bit
+	audioBound := byte(0x00)
+	if hasAudio {
+		audioBound = 0x01
+	}
+	b3 := (audioBound << 2) | 0x01
 	return []byte{
 		0x00, 0x00, 0x01, 0xBB,
 		0x00, 0x06,
 		0x80, 0x00, 0x01, // rate_bound + markers
-		0x01,             // audio_bound=0, fixed=0, CSPS=1
+		b3,               // audio_bound, fixed=0, CSPS=1
 		0xFF,             // video_bound + markers
 		0xFC,             // packet_rate_restriction
 	}
 }
 
-func buildPSM() []byte {
-	// stream_type=0x1B H.264, elementary_stream_id=0xE0
-	// after start+length:
-	//   E0 FF          current_next=1, reserved, version=0
-	//   00 00          program_stream_info_length=0
-	//   00 04          elementary_stream_map_length=4
-	//   1B E0 00 00    type, id, es_info_len
-	//   CRC32 (4)
-	body := []byte{
-		0xE0, 0xFF,
-		0x00, 0x00,
-		0x00, 0x04,
-		0x1B, 0xE0,
-		0x00, 0x00,
-		0x00, 0x00, 0x00, 0x00, // CRC 占位，多数 demux 不校验
+func buildPSM(hasAudio bool) []byte {
+	// Program Stream Map (0x000001BC)
+	// stream_type=0x1B H.264 (stream_id=0xE0)
+	// stream_type=0x90 G.711A (stream_id=0xC0)
+	var esMap []byte
+	if hasAudio {
+		esMap = []byte{
+			0x1B, 0xE0, 0x00, 0x00, // Video: H.264, stream_id 0xE0
+			0x90, 0xC0, 0x00, 0x00, // Audio: G.711A, stream_id 0xC0
+		}
+	} else {
+		esMap = []byte{
+			0x1B, 0xE0, 0x00, 0x00, // Video: H.264, stream_id 0xE0
+		}
 	}
-	out := []byte{0x00, 0x00, 0x01, 0xBC, byte(len(body) >> 8), byte(len(body))}
-	return append(out, body...)
+	esMapLen := len(esMap)
+	body := make([]byte, 6+esMapLen+4)
+	body[0] = 0xE0 // current_next=1, reserved, version=0
+	body[1] = 0xFF // reserved + marker
+	body[2] = 0x00 // program_stream_info_length = 0
+	body[3] = 0x00
+	body[4] = byte(esMapLen >> 8) // elementary_stream_map_length
+	body[5] = byte(esMapLen)
+	copy(body[6:], esMap)
+
+	// MPEG-2 CRC32 (polynomial: 0x04C11DB7, init: 0xFFFFFFFF)
+	crc := crc32MPEG2(body[:6+esMapLen])
+	binary.BigEndian.PutUint32(body[6+esMapLen:], crc)
+
+	out := make([]byte, 6+len(body))
+	out[0], out[1], out[2], out[3] = 0x00, 0x00, 0x01, 0xBC
+	binary.BigEndian.PutUint16(out[4:6], uint16(len(body)))
+	copy(out[6:], body)
+	return out
+}
+
+// crc32MPEG2 计算 ISO/IEC 13818-1 规定的 32 位 CRC
+func crc32MPEG2(data []byte) uint32 {
+	crc := uint32(0xFFFFFFFF)
+	for _, b := range data {
+		crc ^= uint32(b) << 24
+		for i := 0; i < 8; i++ {
+			if crc&0x80000000 != 0 {
+				crc = (crc << 1) ^ 0x04C11DB7
+			} else {
+				crc <<= 1
+			}
+		}
+	}
+	return crc
 }
 
 func buildPES(streamID byte, es []byte, pts uint64) []byte {

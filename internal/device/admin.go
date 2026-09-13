@@ -32,10 +32,13 @@ type AddChannelRequest struct {
 
 // BindChannelRequest 绑定通道媒体。
 type BindChannelRequest struct {
-	ChannelID string `json:"channelId"`
-	Source    string `json:"source"` // mp4 | file | synthetic
-	MP4       string `json:"mp4"`
-	H264      string `json:"h264"`
+	ChannelID    string `json:"channelId"`
+	Source       string `json:"source"` // mp4 | file | synthetic
+	MP4          string `json:"mp4"`
+	H264         string `json:"h264"`
+	AudioEnabled *bool  `json:"audioEnabled,omitempty"`
+	AudioSource  string `json:"audioSource,omitempty"`
+	AudioFile    string `json:"audioFile,omitempty"`
 }
 
 func (d *Device) cfgLock() { d.cfgMu.Lock() }
@@ -147,17 +150,15 @@ func (d *Device) BindChannelVideo(req BindChannelRequest) error {
 	}
 
 	source := strings.ToLower(strings.TrimSpace(req.Source))
-	if source == "" {
-		source = "mp4"
-	}
-	switch source {
-	case "mp4", "file", "synthetic", "ptz":
-	default:
-		return fmt.Errorf("source 必须是 mp4/file/synthetic/ptz")
+	if source != "" {
+		switch source {
+		case "mp4", "file", "synthetic", "ptz":
+		default:
+			return fmt.Errorf("source 必须是 mp4/file/synthetic/ptz")
+		}
 	}
 
 	d.cfgLock()
-	defer d.cfgUnlock()
 
 	found := false
 	for _, ch := range d.cfg.Device.Channels {
@@ -167,6 +168,7 @@ func (d *Device) BindChannelVideo(req BindChannelRequest) error {
 		}
 	}
 	if !found {
+		d.cfgUnlock()
 		return fmt.Errorf("通道不存在: %s", id)
 	}
 
@@ -176,30 +178,56 @@ func (d *Device) BindChannelVideo(req BindChannelRequest) error {
 	// 绑定即切到 per_channel，否则共享模式下改绑定无效
 	d.cfg.Media.Mode = "per_channel"
 
-	cfg := config.ChannelMediaConfig{Source: source}
+	// 从原有配置继承，避免仅更新伴音或单独字段时把视频文件或源类型冲掉
+	cfg := d.cfg.Media.Channels[id]
+	if source != "" {
+		cfg.Source = source
+	}
 	if mp4 := normalizeVideoPath(req.MP4); mp4 != "" {
 		cfg.MP4File = mp4
-		if source == "" {
+		if cfg.Source == "" {
 			cfg.Source = "mp4"
 		}
 	}
 	if h := normalizeVideoPath(req.H264); h != "" {
 		cfg.H264File = h
-	}
-	if source == "mp4" && cfg.MP4File == "" {
-		// 继承全局
-		if d.cfg.Media.MP4File != "" {
-			cfg.MP4File = d.cfg.Media.MP4File
+		if cfg.Source == "" {
+			cfg.Source = "file"
 		}
+	}
+	if req.AudioEnabled != nil {
+		cfg.AudioEnabled = req.AudioEnabled
+	}
+	if req.AudioSource != "" {
+		cfg.AudioSource = req.AudioSource
+	}
+	if req.AudioFile != "" {
+		cfg.AudioFile = req.AudioFile
 	}
 
 	d.cfg.Media.Channels[id] = cfg
-	log.Printf("[ui] bind channel %s source=%s mp4=%s h264=%s", id, cfg.Source, cfg.MP4File, cfg.H264File)
+	log.Printf("[ui] bind channel %s source=%s mp4=%s h264=%s audioEnabled=%v audioSource=%s",
+		id, cfg.Source, cfg.MP4File, cfg.H264File, cfg.AudioEnabled, cfg.AudioSource)
 
-	// 若该通道正在播，停掉让下次点播用新源
-	go d.ms.StopByChannel(id)
-	if d.OnConfigChanged != nil {
-		d.OnConfigChanged(d.cfg)
+	videoChanged := req.Source != "" || req.MP4 != "" || req.H264 != ""
+	onChanged := d.OnConfigChanged
+	cfgCopy := *d.cfg
+	d.cfgUnlock()
+
+	if onChanged != nil {
+		onChanged(&cfgCopy)
+	}
+
+	if videoChanged {
+		// 视频源发生变更：停掉旧推流，让下次点播使用新视频源
+		if d.ms != nil {
+			go d.ms.StopByChannel(id)
+		}
+	} else if d.ms != nil {
+		// 仅伴音配置变更：对当前正在活跃推流的会话执行无缝热更新，不停视频流！
+		opts := cfgCopy.Media.OptionsFor(id)
+		src, codec, kind, _ := d.CreateAudioSourceForChannel(id)
+		d.ms.UpdateChannelAudio(id, opts.AudioEnabled, src, codec, kind)
 	}
 	return nil
 }

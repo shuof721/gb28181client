@@ -3,6 +3,7 @@ package media
 import (
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"strconv"
 	"strings"
@@ -245,6 +246,15 @@ type Session struct {
 	payload int
 	localIP string
 
+	// 伴音与音频复合流
+	audioMu         sync.RWMutex
+	hasAudio        bool
+	audioSource     AudioSource
+	audioCodec      string
+	audioSourceKind string
+	audioLevelBits  atomic.Uint64 // 阻尼平滑电平 (float64 bits)
+	audioLevel      atomic.Uint32 // 0 ~ 100
+
 	seq uint16
 
 	packetsSent atomic.Uint64
@@ -345,19 +355,103 @@ func (s *Session) CurrentOffset() float64 {
 	return float64(s.currentOffset.Load()) / 1000.0
 }
 
+func (s *Session) AudioLevel() float64 {
+	bits := s.audioLevelBits.Load()
+	if bits != 0 {
+		return math.Round(math.Float64frombits(bits)*10) / 10
+	}
+	return float64(s.audioLevel.Load())
+}
+
+func (s *Session) setAudioLevel(v float64) {
+	oldBits := s.audioLevelBits.Load()
+	oldVal := math.Float64frombits(oldBits)
+	var newVal float64
+	if v >= oldVal {
+		// 快速上升 (Fast Attack)：声音产生时瞬时响应冲顶
+		newVal = v
+	} else {
+		// 平滑释放 (Smooth Release)：维持峰值并以阻尼平滑回落，使轮询和 UI 进度条灵动跳动
+		newVal = oldVal*0.86 + v*0.14
+		if newVal < 0.5 {
+			newVal = 0
+		}
+	}
+	s.audioLevelBits.Store(math.Float64bits(newVal))
+	s.audioLevel.Store(uint32(math.Round(newVal)))
+}
+
+func (s *Session) HasAudio() bool {
+	s.audioMu.RLock()
+	defer s.audioMu.RUnlock()
+	return s.hasAudio
+}
+
+func (s *Session) AudioCodec() string {
+	s.audioMu.RLock()
+	defer s.audioMu.RUnlock()
+	if s.audioCodec == "" {
+		return "G.711A"
+	}
+	return s.audioCodec
+}
+
+func (s *Session) AudioSourceKind() string {
+	s.audioMu.RLock()
+	defer s.audioMu.RUnlock()
+	return s.audioSourceKind
+}
+
+func (s *Session) UpdateAudio(hasAudio bool, src AudioSource, codec, kind string) {
+	s.audioMu.Lock()
+	old := s.audioSource
+	s.hasAudio = hasAudio
+	s.audioSource = src
+	if codec != "" {
+		s.audioCodec = codec
+	}
+	if kind != "" {
+		s.audioSourceKind = kind
+	}
+	s.audioMu.Unlock()
+	if old != nil && old != src {
+		_ = old.Close()
+	}
+	log.Printf("[media] session %s ch=%s audio hot-swapped: hasAudio=%v kind=%s codec=%s",
+		s.CallID, s.ChannelID, hasAudio, kind, codec)
+}
+
 type SessionManager struct {
 	mu       sync.Mutex
 	sessions map[string]*Session // key: callID
 	byChan   map[string]*Session
 
-	sourceFactory func(channelID string) (H264Source, error)
-	fps           int
-	payload       int
-	localIP       string
+	sourceFactory      func(channelID string) (H264Source, error)
+	audioSourceFactory func(channelID string) (AudioSource, string, string, error)
+	fps                int
+	payload            int
+	localIP            string
 
 	OnStart    func(ch string, callID string)
 	OnStop     func(ch string, callID string)
 	OnComplete func(ch string, callID string)
+}
+
+func (m *SessionManager) SetAudioSourceFactory(factory func(channelID string) (AudioSource, string, string, error)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.audioSourceFactory = factory
+}
+
+func (m *SessionManager) UpdateChannelAudio(channelID string, hasAudio bool, src AudioSource, codec, kind string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.byChan[channelID]
+	if !ok || s == nil {
+		return false
+	}
+	s.UpdateAudio(hasAudio, src, codec, kind)
+	return true
 }
 
 func NewSessionManager(localIP string, fps, payload int, factory func(channelID string) (H264Source, error)) *SessionManager {
@@ -399,8 +493,23 @@ func (m *SessionManager) StartPlayback(channelID, callID string, recv *SDPInfo, 
 	}
 	return m.StartSession(channelID, callID, recv, streamType, initialOffset)
 }
-
 func (m *SessionManager) StartSession(channelID, callID string, recv *SDPInfo, streamType string, initialOffset float64) (answerSDP string, err error) {
+	var aSrc AudioSource
+	hasAudio := false
+	aCodec := "G.711A"
+	aKind := ""
+	if m.audioSourceFactory != nil {
+		as, codec, kind, err := m.audioSourceFactory(channelID)
+		if err == nil && as != nil {
+			aSrc = as
+			hasAudio = true
+			if codec != "" {
+				aCodec = codec
+			}
+			aKind = kind
+		}
+	}
+
 	m.mu.Lock()
 	if streamType == "live" {
 		if old, ok := m.byChan[channelID]; ok {
@@ -417,18 +526,22 @@ func (m *SessionManager) StartSession(channelID, callID string, recv *SDPInfo, s
 	}
 
 	s := &Session{
-		ChannelID:     channelID,
-		CallID:        callID,
-		SSRC:          FormatSSRC(ssrcNum),
-		ssrcNum:       ssrcNum,
-		StreamType:    streamType,
-		remoteIP:      recv.IP,
-		remotePort:    recv.VideoPort,
-		isTCP:         recv.IsTCP,
-		factory:       func() (H264Source, error) { return m.sourceFactory(channelID) },
-		fps:           m.fps,
-		payload:       m.payload,
-		localIP:       m.localIP,
+		ChannelID:       channelID,
+		CallID:          callID,
+		SSRC:            FormatSSRC(ssrcNum),
+		ssrcNum:         ssrcNum,
+		StreamType:      streamType,
+		remoteIP:        recv.IP,
+		remotePort:      recv.VideoPort,
+		isTCP:           recv.IsTCP,
+		factory:         func() (H264Source, error) { return m.sourceFactory(channelID) },
+		fps:             m.fps,
+		payload:         m.payload,
+		localIP:         m.localIP,
+		hasAudio:        hasAudio,
+		audioSource:     aSrc,
+		audioCodec:      aCodec,
+		audioSourceKind: aKind,
 		startTime:     time.Now(),
 		scale:         1.0,
 		initialOffset: initialOffset,
@@ -449,8 +562,8 @@ func (m *SessionManager) StartSession(channelID, callID string, recv *SDPInfo, s
 	answer := BuildAnswerSDP(channelID, channelID, m.localIP, s.SSRC, recv)
 	s.wg.Add(1)
 	go s.loop()
-	log.Printf("[media] start %s ch=%s callID=%s -> %s:%d ssrc=%s tcp=%v",
-		streamType, channelID, callID, s.remoteIP, s.remotePort, s.SSRC, s.isTCP)
+	log.Printf("[media] start %s ch=%s callID=%s -> %s:%d ssrc=%s tcp=%v audio=%v",
+		streamType, channelID, callID, s.remoteIP, s.remotePort, s.SSRC, s.isTCP, hasAudio)
 	if m.OnStart != nil {
 		m.OnStart(channelID, callID)
 	}
@@ -490,6 +603,10 @@ type SessionInfo struct {
 	Scale         float64 `json:"scale"`
 	Paused        bool    `json:"paused"`
 	CurrentOffset float64 `json:"currentOffset"`
+	AudioEnabled  bool    `json:"audioEnabled"`
+	AudioCodec    string  `json:"audioCodec,omitempty"`
+	AudioSource   string  `json:"audioSource,omitempty"`
+	AudioLevel    float64 `json:"audioLevel"`
 }
 
 func (m *SessionManager) ListSessions() []SessionInfo {
@@ -524,6 +641,10 @@ func (m *SessionManager) ListSessions() []SessionInfo {
 			Scale:         s.GetScale(),
 			Paused:        s.IsPaused(),
 			CurrentOffset: s.CurrentOffset(),
+			AudioEnabled:  s.hasAudio,
+			AudioCodec:    s.AudioCodec(),
+			AudioSource:   s.audioSourceKind,
+			AudioLevel:    s.AudioLevel(),
 		})
 	}
 	return out
@@ -624,6 +745,10 @@ func (s *Session) loop() {
 		if s.source != nil {
 			_ = s.source.Close()
 		}
+		if s.audioSource != nil {
+			_ = s.audioSource.Close()
+		}
+		s.setAudioLevel(0)
 		if s.tcpConn != nil {
 			_ = s.tcpConn.Close()
 		}
@@ -731,6 +856,7 @@ func (s *Session) loop() {
 		}
 
 		if s.paused.Load() {
+			s.setAudioLevel(0)
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
@@ -779,9 +905,34 @@ func (s *Session) loop() {
 		if len(frame) == 0 {
 			continue
 		}
+
+		// 处理对应时间切片的伴音采样
+		var audioBytes []byte
+		s.audioMu.RLock()
+		curHasAudio := s.hasAudio
+		curASrc := s.audioSource
+		s.audioMu.RUnlock()
+
+		if curHasAudio && curASrc != nil {
+			samples := int(float64(8000) / fps)
+			if samples <= 0 {
+				samples = 320
+			}
+			rawAudio, pcm, err := curASrc.NextChunk(samples)
+			if err == nil && len(rawAudio) > 0 {
+				audioBytes = rawAudio
+				lvl := CalculateRMSLevel(pcm)
+				s.setAudioLevel(lvl)
+			} else {
+				s.setAudioLevel(0)
+			}
+		} else {
+			s.setAudioLevel(0)
+		}
+
 		// 90kHz：PES 与 RTP 时间戳同步
 		rtpTS := uint32(wallClock)
-		ps := PackVideoPES(frame, wallClock)
+		ps := PackCompoundPES(frame, audioBytes, wallClock)
 		pkts := RTPPacketizePS(ps, s.ssrcNum, &s.seq, rtpTS, 96, s.payload)
 		wallClock += uint64(90000 / s.fps)
 		s.currentOffset.Add(int64(1000 / s.fps))
